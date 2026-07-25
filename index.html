@@ -1138,16 +1138,19 @@ function recalcularTodo(){
     const centrales=clasificarOperadoresCentrales(ST.base.rows, esComisionable);
     centralesSet=centrales;
     vendCalc=comisionVendedores(ST.base.rows, ST.prima, esComisionable, centrales);
-    // Detalle de operadores CAT/WEB y su aporte (para conciliar informe vs comisión, con columnas completas)
+    // Detalle: SOLO las pólizas donde el CR es comercial pero el operador es central.
+    // Esas son las que descuadran (gerencia produjo X genuinos, comisión muestra X-n).
     const det={};
     let ventasExc=0;
     for(const r of ST.base.rows){
       if(!centrales.has(r.matricula)) continue;
       if(r.genuino) ventasExc++;
+      if(!esComisionable(r.cr)) continue; // <-- clave: solo CR comercial
       const m=String(r.matricula);
       if(!det[m]) det[m]={matricula:m, gen:0, no:0, total:0, crs:{}};
       det[m].total++;
-      if(r.genuino){ det[m].gen++; det[m].crs[r.cr]=(det[m].crs[r.cr]||0)+1; } else det[m].no++;
+      if(r.genuino){ det[m].gen++; } else det[m].no++;
+      det[m].crs[r.cr]=(det[m].crs[r.cr]||0)+1;
     }
     excluidosDetalle=Object.values(det).filter(d=>d.gen>0||d.no>0).map(d=>{
       let crP=null,mx=-1; for(const cr in d.crs){ if(d.crs[cr]>mx){mx=d.crs[cr];crP=Number(cr);} }
@@ -1439,13 +1442,39 @@ function renderInforme(){
   // ---- País (todos los canales) ----
   let pGen=0,pNo=0,pGenP=0,pNoP=0;
   rows.forEach(r=>{ if(r.genuino){pGen++;pGenP+=r.premio;} else {pNo++;pNoP+=r.premio;} });
-  document.getElementById('boxPais').innerHTML=
+  let paisHTML=
     '<div class="pais-grid">'+
     '<div class="pais-box tot"><div class="lbl">Seguros realizados</div><div class="big">'+num(pGen+pNo)+'</div><div class="sub">total del período</div></div>'+
     '<div class="pais-box gen"><div class="lbl">Genuinos</div><div class="big">'+num(pGen)+'</div><div class="sub">'+((pGen+pNo)?(pGen/(pGen+pNo)*100).toFixed(1):'0')+'% del total</div></div>'+
     '<div class="pais-box no"><div class="lbl">No genuinos</div><div class="big">'+num(pNo)+'</div><div class="sub">'+((pGen+pNo)?(pNo/(pGen+pNo)*100).toFixed(1):'0')+'% del total</div></div>'+
     '<div class="pais-box tot"><div class="lbl">Prima cobrada</div><div class="big" style="font-size:20px">'+money(pGenP+pNoP)+'</div><div class="sub">genuina '+money(pGenP)+'</div></div>'+
     '</div>';
+  // ---- Cuadrito: desglose del total país por grupo (suma = total) ----
+  const CANAL_CR={'1864':'CAT — Centro de Atención', '2925':'ACANET / WEB', '1902':'Sistemas'};
+  const grupos={}; // nombre -> {seg, gen}
+  const add=(k,g)=>{ if(!grupos[k]) grupos[k]={seg:0,gen:0}; grupos[k].seg++; if(g) grupos[k].gen++; };
+  rows.forEach(r=>{
+    const crStr=String(r.cr);
+    if(CANAL_CR[crStr]) add(CANAL_CR[crStr], r.genuino);
+    else if(GD_COM.includes(gd[r.cr])) add('Gestión Operativa (Gerencias Divisionales)', r.genuino);
+    else add('Otras áreas', r.genuino);
+  });
+  const orden=['Gestión Operativa (Gerencias Divisionales)','CAT — Centro de Atención','ACANET / WEB','Sistemas','Otras áreas'];
+  const listaGrupos=orden.filter(k=>grupos[k]).map(k=>({nombre:k, ...grupos[k]}));
+  const sumaSeg=listaGrupos.reduce((s,g)=>s+g.seg,0);
+  if(listaGrupos.length){
+    paisHTML+='<div class="foot-note" style="margin-top:14px"><b>Discriminación del total producido</b> ('+num(sumaSeg)+' seguros) — cuánto aportó cada canal:</div>';
+    paisHTML+='<div class="pais-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin-top:6px">';
+    listaGrupos.forEach(g=>{
+      const esComercial = g.nombre.startsWith('Gestión Operativa');
+      const borde = esComercial ? '#1e7d45' : (g.nombre==='Otras áreas' ? '#94a3b8' : '#7c5cbf');
+      const pct = sumaSeg? (g.seg/sumaSeg*100).toFixed(1) : '0';
+      paisHTML+='<div class="pais-box" style="border-left:4px solid '+borde+'"><div class="lbl">'+g.nombre+'</div><div class="big" style="font-size:22px">'+num(g.seg)+'</div><div class="sub">'+pct+'% del total · '+num(g.gen)+' genuinos</div></div>';
+    });
+    paisHTML+='</div>';
+    paisHTML+='<div class="foot-note" style="margin-top:4px">Suma de todos los canales = '+num(sumaSeg)+' (coincide con el total país).</div>';
+  }
+  document.getElementById('boxPais').innerHTML=paisHTML;
 
   // ---- Estructura por GD comercial ----
   const H={};
