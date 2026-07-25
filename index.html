@@ -244,6 +244,7 @@ tr.top3 td{background:#fffdf5}
   <button data-tab="comisiones" style="--acc:#1e7d45">Comisiones</button>
   <button data-tab="informe" style="--acc:#155a8a">Informe por Gerencia</button>
   <button data-tab="top" style="--acc:#c99700">Top ranking</button>
+  <button data-tab="evolucion" style="--acc:#0e8a7a">Evolución</button>
   <button data-tab="historico" style="--acc:#64748b">Histórico</button>
   <button data-tab="exportar" style="--acc:#7c5cbf">Exportar</button>
   <button data-tab="maestras" style="--acc:#475569">Tablas maestras</button>
@@ -262,8 +263,15 @@ tr.top3 td{background:#fffdf5}
         <input type="month" class="txt" id="inpPeriodo"></div>
       <div><label class="fld">Prima promedio del mes ($)</label>
         <input type="number" class="txt" id="inpPrima" placeholder="135773.69" step="0.01"></div>
-      <div><label class="fld">Corte de datos</label>
-        <input type="text" class="txt" id="inpCorte" placeholder="Ej: 01 al 22"></div>
+      <div><label class="fld">Corte — desde</label>
+        <input type="date" class="txt" id="inpDesde"></div>
+    </div>
+    <div class="grid3" style="margin-top:10px">
+      <div><label class="fld">Corte — hasta</label>
+        <input type="date" class="txt" id="inpHasta"></div>
+      <div style="grid-column:span 2;align-self:end">
+        <div class="desc" id="diasInfo" style="margin:0">El corte define los días para calcular "seguros por día". Dejá desde/hasta vacíos si es el mes completo.</div>
+      </div>
     </div>
   </div>
 
@@ -296,6 +304,7 @@ tr.top3 td{background:#fffdf5}
     <div class="btn-row">
       <button class="btn amar" id="btnCalcular" disabled>Calcular comisiones del mes</button>
       <button class="btn ghost sm" id="btnGuardar" disabled>Guardar cierre en histórico</button>
+      <button class="btn ghost sm" id="btnNuevoProceso">Nuevo proceso (blanquear)</button>
       <span id="calcState" style="font-size:12.5px;color:var(--gris)"></span>
     </div>
     <div id="cargarMsgs"></div>
@@ -501,6 +510,24 @@ tr.top3 td{background:#fffdf5}
   </div>
 </section>
 
+<!-- ============ TAB EVOLUCIÓN ============ -->
+<section class="panel" id="tab-evolucion">
+  <div class="card">
+    <div class="flexbar">
+      <div><h2>Evolución en el tiempo</h2>
+        <div class="desc" style="margin:0">Cómo evoluciona cada gerencia, dependencia o jefe, según los cierres guardados. Solo pólizas genuinas.</div></div>
+      <button class="btn ghost sm" id="btnEvolActualizar">↻ Actualizar</button>
+    </div>
+    <div class="btn-row" style="gap:14px;flex-wrap:wrap;align-items:flex-end">
+      <div><label class="fld">Nivel</label><div class="seg" id="segEvNivel"><button data-v="gd" class="on">Gerencia</button><button data-v="dep">Dependencia</button><button data-v="jefe">Jefe</button></div></div>
+      <div><label class="fld">Métrica</label><div class="seg" id="segEvMet"><button data-v="dia" class="on">Seguros/día</button><button data-v="seg">Seguros totales</button><button data-v="prima">Prima</button></div></div>
+    </div>
+    <div id="evolAviso" class="desc"></div>
+    <div id="evolChart" style="margin:14px 0"></div>
+    <div id="evolTabla"></div>
+  </div>
+</section>
+
 <iframe id="printFrame" style="position:absolute;width:0;height:0;border:none;left:-9999px"></iframe>
 
 </div></main>
@@ -691,6 +718,9 @@ async function entrarApp(){
   const tabAct=document.querySelector('nav.tabs button[data-tab="actividad"]');
   if(tabAct) tabAct.style.display = SESION.admin ? '' : 'none';
   await sincronizarDesdeNube();
+  // Mostrar automáticamente el último cierre guardado (si hay y tiene detalle)
+  const ultimos=(DB.cierres||[]).filter(c=>c.detalle).sort((a,b)=>a.periodo<b.periodo?1:-1);
+  if(ultimos.length){ abrirCierre(ultimos[0].periodo); toast('Se abrió el último cierre guardado ('+ultimos[0].periodo+'). Tocá "Nuevo proceso" para cargar otro mes.','ok'); }
 }
 
 /* ---- Sincronización de datos (nube <-> app) ---- */
@@ -772,7 +802,7 @@ function saveDB(db){
 let DB = loadDB();
 
 /* ================= ESTADO EN MEMORIA ================= */
-let ST = { periodo:'', prima:0, corte:'', base:null, cartera:null, calc:null };
+let ST = { periodo:'', prima:0, desde:'', hasta:'', dias:0, base:null, cartera:null, calc:null };
 
 /* ================= HELPERS DE PARSEO XLSX ================= */
 function parseCSVText(text){
@@ -931,6 +961,7 @@ document.querySelectorAll('nav.tabs button').forEach(b=>{
     document.querySelectorAll('.panel').forEach(p=>p.classList.remove('on'));
     document.getElementById('tab-'+b.dataset.tab).classList.add('on');
     if(b.dataset.tab==='actividad') renderActividad();
+    if(b.dataset.tab==='evolucion') renderEvolucion();
   };
 });
 document.getElementById('btnActRefrescar').onclick=renderActividad;
@@ -980,11 +1011,35 @@ function personalConflictos(){
 }
 
 /* ================= carga de archivos del mes ================= */
-document.getElementById('inpPeriodo').oninput=e=>{ ST.periodo=e.target.value; refreshBadge(); checkReady(); };
+document.getElementById('inpPeriodo').oninput=e=>{ ST.periodo=e.target.value; refreshBadge(); checkReady(); autoFechasMes(); };
 document.getElementById('inpPrima').oninput=e=>{ ST.prima=Number(e.target.value)||0; checkReady(); };
-document.getElementById('inpCorte').oninput=e=>{ ST.corte=e.target.value; };
+document.getElementById('inpDesde').oninput=e=>{ ST.desde=e.target.value; refreshDias(); };
+document.getElementById('inpHasta').oninput=e=>{ ST.hasta=e.target.value; refreshDias(); };
+// días del corte: si hay desde/hasta usa esas fechas; si no, todo el mes
+function diasDelCorte(periodo, desde, hasta){
+  if(desde && hasta){ const d1=new Date(desde), d2=new Date(hasta); const dias=Math.round((d2-d1)/86400000)+1; return dias>0?dias:1; }
+  if(periodo){ const [y,m]=periodo.split('-').map(Number); return new Date(y, m, 0).getDate(); } // días del mes
+  return 30;
+}
+function refreshDias(){
+  const dias=diasDelCorte(ST.periodo, ST.desde, ST.hasta);
+  const txt = (ST.desde&&ST.hasta) ? ('Corte de '+dias+' días ('+ST.desde+' a '+ST.hasta+').') : ('Mes completo: '+dias+' días.');
+  const el=document.getElementById('diasInfo'); if(el) el.textContent=txt+' Se usa para "seguros por día".';
+  ST.dias=dias;
+}
+// al elegir el mes, precargar desde/hasta con el 1 y el último día (editable)
+function autoFechasMes(){
+  if(!ST.periodo) return;
+  const [y,m]=ST.periodo.split('-').map(Number);
+  const ult=new Date(y,m,0).getDate();
+  const pad=n=>String(n).padStart(2,'0');
+  const d=document.getElementById('inpDesde'), h=document.getElementById('inpHasta');
+  if(d && !d.value){ d.value=ST.periodo+'-01'; ST.desde=d.value; }
+  if(h && !h.value){ h.value=ST.periodo+'-'+pad(ult); ST.hasta=h.value; }
+  refreshDias();
+}
 // Enter en los campos no debe recargar ni borrar nada
-['inpPeriodo','inpPrima','inpCorte'].forEach(id=>{
+['inpPeriodo','inpPrima','inpDesde','inpHasta'].forEach(id=>{
   document.getElementById(id).addEventListener('keydown', ev=>{ if(ev.key==='Enter'){ ev.preventDefault(); ev.target.blur(); } });
 });
 
@@ -1071,6 +1126,8 @@ document.getElementById('btnCalcular').onclick=()=>{
 
   ST.calc={ st, gd, oficina, vend:vendCalc, jefe:jefeCalc, prevFuente:prev.fuente,
             tieneMat:ST.base.tieneMatricula, centralesInfo, centralesSet, excluidosDetalle };
+  // Agregados para evolución (solo genuinos, GGDD comerciales)
+  ST.calc.evol = construirEvolucion(ST.base.rows, gd, oficina);
   renderComisiones(); renderInforme(); renderTop();
   document.getElementById('btnGuardar').disabled=false;
   document.getElementById('btnExpRRHH').disabled=false;
@@ -1081,31 +1138,100 @@ document.getElementById('btnCalcular').onclick=()=>{
   toast('Cálculo listo. Revisá la solapa Comisiones.','ok');
 };
 
+/* ================= EVOLUCIÓN: snapshot por GD / dependencia / jefe ================= */
+function construirEvolucion(rows, gd, oficina){
+  const GD={}, DEP={}, JEFE={};
+  const jm = (typeof jefeMap==='function') ? jefeMap() : {};
+  rows.forEach(r=>{
+    const g=gd[r.cr]; if(!GD_COM.includes(g)) return;
+    if(!r.genuino) return;               // solo genuinos
+    // por gerencia
+    if(!GD[g]) GD[g]={gen:0,genP:0};
+    GD[g].gen++; GD[g].genP+=r.premio;
+    // por dependencia (CR)
+    const depKey=String(r.cr);
+    if(!DEP[depKey]) DEP[depKey]={nombre:oficina[r.cr]||('CR '+r.cr), gd:g, gen:0,genP:0};
+    DEP[depKey].gen++; DEP[depKey].genP+=r.premio;
+    // por jefe (según CR)
+    const jefe=jm[r.cr];
+    if(jefe){ const jk=jefe.matricula;
+      if(!JEFE[jk]) JEFE[jk]={nombre:jefe.nombre, matricula:jk, gen:0,genP:0};
+      JEFE[jk].gen++; JEFE[jk].genP+=r.premio;
+    }
+  });
+  return {gd:GD, dep:DEP, jefe:JEFE};
+}
+
 /* ================= GUARDAR CIERRE ================= */
 document.getElementById('btnGuardar').onclick=()=>{
   if(!ST.calc) return;
   const previo=(DB.cierres||[]).find(c=>c.periodo===ST.periodo);
   if(previo){
-    const cortePrev = previo.corte?('corte "'+previo.corte+'"'):'sin etiqueta de corte';
-    if(!confirm('Ya hay un cierre guardado para '+ST.periodo+' ('+cortePrev+').\n\nSe va a reemplazar por este ('+(ST.corte?('corte "'+ST.corte+'"'):'sin etiqueta')+'). Es la misma foto del mes, más completa — no se suman.\n\n¿Reemplazar?')) return;
+    const cortePrev = previo.desde?('corte '+previo.desde+' a '+previo.hasta):'mes completo';
+    const corteAct = (ST.desde&&ST.hasta)?('corte '+ST.desde+' a '+ST.hasta):'mes completo';
+    if(!confirm('Ya hay un cierre guardado para '+ST.periodo+' ('+cortePrev+').\n\nSe va a reemplazar por este ('+corteAct+'). Es la misma foto del mes, más completa — no se suman.\n\n¿Reemplazar?')) return;
   }
   const totVend=ST.calc.vend.reduce((s,v)=>s+v.comision,0);
   const totJefe=ST.calc.jefe.jefes.reduce((s,v)=>s+v.comision,0);
-  const cierre={ periodo:ST.periodo, corte:ST.corte, prima:ST.prima,
-    cartera:ST.cartera, resumen:{ vendedores:ST.calc.vend.length, totVend,
+  const dias=diasDelCorte(ST.periodo, ST.desde, ST.hasta);
+  const cierre={ periodo:ST.periodo, desde:ST.desde||'', hasta:ST.hasta||'', dias, prima:ST.prima,
+    cartera:ST.cartera,
+    resumen:{ vendedores:ST.calc.vend.length, totVend,
       jefes:ST.calc.jefe.jefes.length, totJefe,
       genuinos:Object.values(ST.calc.st).reduce((s,x)=>s+x.genuino_cant,0),
       premioGenuino:Object.values(ST.calc.st).reduce((s,x)=>s+x.genuino_premio,0) },
-    guardado:new Date().toISOString() };
+    // Detalle completo para reabrir (Camino A)
+    detalle:{ vend:ST.calc.vend, jefes:ST.calc.jefe.jefes, excluidosDetalle:ST.calc.excluidosDetalle, centralesInfo:ST.calc.centralesInfo, tieneMat:ST.calc.tieneMat },
+    // Snapshot para evolución (genuinos por GD/dependencia/jefe)
+    evol:ST.calc.evol,
+    guardado:new Date().toISOString(), guardado_por:(SESION?SESION.nombre:'') };
   DB.cierres = (DB.cierres||[]).filter(c=>c.periodo!==ST.periodo);
   DB.cierres.push(cierre);
   saveDB(DB);
   renderHistorico();
-  // guardar también en la base del equipo (compartido, con autor)
   guardarCierreNube(ST.periodo, cierre)
-    .then(()=>{ registrarActividad('cierre','Guardó el cierre '+ST.periodo); toast('Cierre '+ST.periodo+' guardado en la base del equipo por '+SESION.nombre+'.','ok'); })
-    .catch(e=> toast('Guardado local OK, pero no se pudo subir a la base del equipo: '+e.message,'warn'));
+    .then(()=>{ registrarActividad('cierre','Guardó el cierre '+ST.periodo+(cierre.desde?(' ('+cierre.desde+' a '+cierre.hasta+')'):'')); toast('Cierre '+ST.periodo+' guardado en la base del equipo por '+SESION.nombre+'.','ok'); })
+    .catch(e=> toast('Guardado local OK, pero no se pudo subir a la base del equipo: '+e.message,'err'));
 };
+
+/* ================= NUEVO PROCESO (blanquear) ================= */
+document.getElementById('btnNuevoProceso').onclick=()=>{
+  if(!confirm('¿Blanquear la pantalla para empezar un proceso nuevo?\n\nEsto NO borra el histórico ni los cierres guardados. Solo limpia lo que estás viendo ahora para cargar otro mes.')) return;
+  ST.periodo=''; ST.prima=0; ST.desde=''; ST.hasta=''; ST.dias=0; ST.base=null; ST.cartera=null; ST.calc=null;
+  ['inpPeriodo','inpPrima','inpDesde','inpHasta'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
+  ['dropBase','dropCartera'].forEach(id=>{ const el=document.getElementById(id); if(el) el.classList.remove('ok'); });
+  const bn=document.getElementById('fileBaseName'); if(bn) bn.textContent='';
+  const cn=document.getElementById('fileCarteraName'); if(cn) cn.textContent='';
+  document.getElementById('baseInfo').innerHTML=''; 
+  const ci=document.getElementById('carteraInfo'); if(ci) ci.innerHTML='';
+  document.getElementById('btnCalcular').disabled=true;
+  document.getElementById('btnGuardar').disabled=true;
+  document.getElementById('btnExpRRHH').disabled=true;
+  document.getElementById('btnExpInforme').disabled=true;
+  ['comisionesEmpty','informeEmpty','topEmpty'].forEach(id=>{ const e=document.getElementById(id); if(e) e.style.display='block'; });
+  ['comisionesContent','informeContent','topContent'].forEach(id=>{ const e=document.getElementById(id); if(e) e.style.display='none'; });
+  document.getElementById('calcState').textContent='';
+  refreshBadge();
+  document.querySelector('nav.tabs button[data-tab="cargar"]').click();
+  toast('Pantalla blanqueada. Cargá el nuevo mes.','ok');
+};
+
+/* ================= ABRIR UN CIERRE GUARDADO (ver detalle) ================= */
+function abrirCierre(periodo){
+  const c=(DB.cierres||[]).find(x=>x.periodo===periodo);
+  if(!c || !c.detalle){ toast('Este cierre no tiene detalle guardado (es anterior a esta función).','warn'); return; }
+  ST.periodo=c.periodo; ST.prima=c.prima; ST.desde=c.desde||''; ST.hasta=c.hasta||''; ST.dias=c.dias||0;
+  const {oficina, gd}=crMaps();
+  ST.calc = {
+    vend:c.detalle.vend||[], jefe:{jefes:c.detalle.jefes||[]},
+    excluidosDetalle:c.detalle.excluidosDetalle||[], centralesInfo:c.detalle.centralesInfo||{ops:0,ventas:0},
+    tieneMat:c.detalle.tieneMat!==false, gd, oficina, _soloDetalle:true
+  };
+  renderComisiones();
+  refreshBadge();
+  toast('Mostrando el cierre '+periodo+' ('+(c.guardado_por||'—')+').','ok');
+  document.querySelector('nav.tabs button[data-tab="comisiones"]').click();
+}
 
 /* ================= RENDER COMISIONES ================= */
 function renderComisiones(){
@@ -1391,6 +1517,86 @@ function wireSeg(id, key){
   });
 }
 wireSeg('segMetrica','metrica'); wireSeg('segTipo','tipo'); wireSeg('segTop','topN');
+
+/* ================= EVOLUCIÓN ================= */
+const evState={nivel:'gd', metrica:'dia'};
+function cierresOrdenados(){
+  return (DB.cierres||[]).filter(c=>c.evol).slice().sort((a,b)=> a.periodo<b.periodo?-1:1);
+}
+function nombreMes(periodo){ const [y,m]=periodo.split('-'); const M=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic']; return (M[Number(m)-1]||'')+' '+y.slice(2); }
+function valorEvol(entry, metrica, dias){
+  if(!entry) return 0;
+  if(metrica==='prima') return entry.genP||0;
+  if(metrica==='seg')  return entry.gen||0;
+  return dias>0 ? (entry.gen/dias) : 0; // seguros/día
+}
+function renderEvolucion(){
+  const cierres=cierresOrdenados();
+  const aviso=document.getElementById('evolAviso');
+  if(cierres.length<1){ document.getElementById('evolChart').innerHTML=''; document.getElementById('evolTabla').innerHTML=''; aviso.innerHTML='<div class="msg info"><span class="ic">i</span><span>Todavía no hay cierres guardados con datos de evolución. Guardá al menos un cierre (calculando un mes y tocando "Guardar cierre") para empezar a ver la evolución.</span></div>'; return; }
+  aviso.textContent = cierres.length===1 ? 'Hay 1 cierre guardado. La tendencia se ve mejor con dos o más meses.' : ('Comparando '+cierres.length+' cierres guardados.');
+
+  // recolectar entidades presentes en el nivel elegido
+  const nivel=evState.nivel, met=evState.metrica;
+  const claves={}; // key -> nombre
+  cierres.forEach(c=>{ const bloque=(c.evol&&c.evol[nivel])||{}; Object.entries(bloque).forEach(([k,v])=>{ claves[k]= nivel==='gd'?prettyGD(k):(v.nombre||k); }); });
+  // ordenar entidades por su último valor desc
+  const ult=cierres[cierres.length-1];
+  const keysOrden=Object.keys(claves).sort((a,b)=>{
+    const va=valorEvol((ult.evol[nivel]||{})[a], met, ult.dias||diasDelCorte(ult.periodo,ult.desde,ult.hasta));
+    const vb=valorEvol((ult.evol[nivel]||{})[b], met, ult.dias||diasDelCorte(ult.periodo,ult.desde,ult.hasta));
+    return vb-va;
+  });
+
+  const fmtVal = v => met==='prima'? money(v) : (met==='dia'? (Math.round(v*10)/10).toLocaleString('es-AR') : num(v));
+  // ---- Tabla: meses en columnas ----
+  let h='<div class="tbl-scroll"><table class="dt"><thead><tr><th>'+(nivel==='gd'?'Gerencia':nivel==='dep'?'Dependencia':'Jefe')+'</th>';
+  cierres.forEach(c=> h+='<th class="r">'+nombreMes(c.periodo)+(c.desde?'<div style="font-size:9px;color:var(--gris)">'+(c.dias||'?')+'d</div>':'')+'</th>');
+  h+='<th class="r">Var. último</th></tr></thead><tbody>';
+  keysOrden.forEach(k=>{
+    h+='<tr><td>'+claves[k]+'</td>';
+    let prev=null, lastTwo=[];
+    cierres.forEach(c=>{ const dias=c.dias||diasDelCorte(c.periodo,c.desde,c.hasta); const v=valorEvol((c.evol[nivel]||{})[k], met, dias); h+='<td class="r mono">'+(v?fmtVal(v):'—')+'</td>'; lastTwo.push(v); });
+    // variación último vs anterior
+    let varCell='—';
+    if(lastTwo.length>=2){ const a=lastTwo[lastTwo.length-2], b=lastTwo[lastTwo.length-1]; if(a>0){ const p=((b-a)/a*100); const col=p>=0?'var(--verde)':'#c0392b'; const sig=p>=0?'▲':'▼'; varCell='<span style="color:'+col+';font-weight:700">'+sig+' '+Math.abs(p).toFixed(0)+'%</span>'; } }
+    h+='<td class="r">'+varCell+'</td></tr>';
+  });
+  h+='</tbody></table></div>';
+  document.getElementById('evolTabla').innerHTML=h;
+
+  // ---- Gráfico de líneas (SVG) para el top 6 entidades ----
+  const top=keysOrden.slice(0,6);
+  const series=top.map(k=> ({ nombre:claves[k], vals: cierres.map(c=>{ const dias=c.dias||diasDelCorte(c.periodo,c.desde,c.hasta); return valorEvol((c.evol[nivel]||{})[k], met, dias); }) }));
+  document.getElementById('evolChart').innerHTML = svgLineas(series, cierres.map(c=>nombreMes(c.periodo)), fmtVal);
+}
+function svgLineas(series, labels, fmtVal){
+  if(!series.length || labels.length<1) return '';
+  const W=Math.max(560, labels.length*90+120), H=300, padL=64, padR=140, padT=16, padB=34;
+  const maxV=Math.max(1, ...series.flatMap(s=>s.vals));
+  const colores=['#0b3d66','#1e7d45','#c99700','#7c5cbf','#155a8a','#b03a5b'];
+  const x=i=> padL + (labels.length===1? (W-padL-padR)/2 : i*(W-padL-padR)/(labels.length-1));
+  const y=v=> padT + (H-padT-padB) * (1 - v/maxV);
+  let s='<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;max-width:'+W+'px;font-family:inherit">';
+  // ejes y grilla
+  for(let g=0; g<=4; g++){ const yy=padT+(H-padT-padB)*g/4; const val=maxV*(1-g/4); s+='<line x1="'+padL+'" y1="'+yy+'" x2="'+(W-padR)+'" y2="'+yy+'" stroke="#eef2f6"/>'; s+='<text x="'+(padL-8)+'" y="'+(yy+4)+'" text-anchor="end" font-size="10" fill="#5f6b76">'+fmtVal(val).replace('$','$ ')+'</text>'; }
+  labels.forEach((lb,i)=>{ s+='<text x="'+x(i)+'" y="'+(H-12)+'" text-anchor="middle" font-size="10" fill="#5f6b76">'+lb+'</text>'; });
+  // líneas
+  series.forEach((se,si)=>{ const col=colores[si%colores.length];
+    if(labels.length===1){ s+='<circle cx="'+x(0)+'" cy="'+y(se.vals[0])+'" r="4" fill="'+col+'"/>'; }
+    else{ let d=''; se.vals.forEach((v,i)=> d+=(i?'L':'M')+x(i)+' '+y(v)+' '); s+='<path d="'+d+'" fill="none" stroke="'+col+'" stroke-width="2.5"/>'; se.vals.forEach((v,i)=> s+='<circle cx="'+x(i)+'" cy="'+y(v)+'" r="3" fill="'+col+'"/>'); }
+    s+='<text x="'+(W-padR+8)+'" y="'+(padT+14+si*18)+'" font-size="11" fill="'+col+'" font-weight="600">'+se.nombre.slice(0,20)+'</text>';
+  });
+  s+='</svg>';
+  return s;
+}
+function wireSegEvol(id, key){
+  document.querySelectorAll('#'+id+' button').forEach(btn=>{
+    btn.onclick=()=>{ document.querySelectorAll('#'+id+' button').forEach(b=>b.classList.remove('on')); btn.classList.add('on'); evState[key]=btn.dataset.v; renderEvolucion(); };
+  });
+}
+wireSegEvol('segEvNivel','nivel'); wireSegEvol('segEvMet','metrica');
+document.getElementById('btnEvolActualizar').onclick=()=>{ sincronizarDesdeNube().then(renderEvolucion); };
 document.getElementById('btnPrintTop').onclick=()=>{
   if(!ST.calc) return;
   const selG=document.getElementById('filtroGDtop'); const gname=selG&&selG.options[selG.selectedIndex]?selG.options[selG.selectedIndex].text:'país';
@@ -1451,9 +1657,11 @@ function renderHistorico(){
   let h='';
   cierres.forEach(c=>{
     const r=c.resumen;
-    h+='<div class="hist-item"><div class="info"><div class="mes">'+c.periodo+(c.corte?' · '+c.corte:'')+'</div>'+
+    const corteTxt = c.desde ? (' · '+c.desde+' a '+c.hasta+' ('+(c.dias||'?')+'d)') : (c.corte?(' · '+c.corte):' · mes completo');
+    const verBtn = c.detalle ? '<button class="btn ghost sm" onclick="abrirCierre(\''+c.periodo+'\')">Ver detalle</button>' : '';
+    h+='<div class="hist-item"><div class="info"><div class="mes">'+c.periodo+corteTxt+(c.guardado_por?(' · <span style="color:var(--gris);font-weight:400">'+c.guardado_por+'</span>'):'')+'</div>'+
       '<div class="det">Prima '+money(c.prima)+' · '+num(r.genuinos)+' genuinos · Ventas '+money(r.totVend)+' ('+r.vendedores+' vend.) · Cartera '+money(r.totJefe)+' ('+r.jefes+' jefes)</div></div>'+
-      '<div class="acts"><button class="btn ghost sm" onclick="borrarCierre(\''+c.periodo+'\')">Borrar</button></div></div>';
+      '<div class="acts">'+verBtn+'<button class="btn ghost sm" onclick="borrarCierre(\''+c.periodo+'\')">Borrar</button></div></div>';
   });
   box.innerHTML=h;
   // tendencia simple
@@ -1838,7 +2046,8 @@ function construirDataInforme(gdKey, orden){
     return {gd:G.gd,gen:G.gen,genP:G.genP,ofis,nVend:nVend.size};
   });
   const filtroNombre = (gdKey && gdKey!=='__ALL__') ? prettyGD(gdKey) : '';
-  return {periodo:ST.periodo,corte:ST.corte,prima:ST.prima,filtroNombre,pais:{gen:pGen,no:pNo,tot:pGen+pNo,genP:pGenP,noP:pNoP},gds};
+  const corteTxt = (ST.desde&&ST.hasta)?(ST.desde+' a '+ST.hasta):'';
+  return {periodo:ST.periodo,corte:corteTxt,prima:ST.prima,filtroNombre,pais:{gen:pGen,no:pNo,tot:pGen+pNo,genP:pGenP,noP:pNoP},gds};
 }
 document.getElementById('btnExpHTML')&&(document.getElementById('btnExpHTML').onclick=()=>{
   if(!ST.calc) return;
