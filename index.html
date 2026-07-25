@@ -247,6 +247,7 @@ tr.top3 td{background:#fffdf5}
   <button data-tab="historico" style="--acc:#64748b">Histórico</button>
   <button data-tab="exportar" style="--acc:#7c5cbf">Exportar</button>
   <button data-tab="maestras" style="--acc:#475569">Tablas maestras</button>
+  <button data-tab="actividad" style="--acc:#b03a5b;display:none">Actividad</button>
 </div></nav>
 
 <main><div class="wrap">
@@ -481,6 +482,25 @@ tr.top3 td{background:#fffdf5}
   </div>
 </section>
 
+<!-- ============ TAB ACTIVIDAD (solo admin) ============ -->
+<section class="panel" id="tab-actividad">
+  <div class="card">
+    <div class="flexbar">
+      <div><h2>Registro de actividad</h2>
+        <div class="desc" style="margin:0">Ingresos y cargas de todo el equipo. Visible solo para el administrador.</div></div>
+      <div class="btn-row" style="margin:0">
+        <select id="actFiltro" class="txt" style="width:auto">
+          <option value="all">Todas las acciones</option>
+          <option value="ingreso">Solo ingresos</option>
+          <option value="carga">Solo cargas</option>
+        </select>
+        <button class="btn ghost sm" id="btnActRefrescar">↻ Actualizar</button>
+      </div>
+    </div>
+    <div id="actWrap"><div class="desc">Cargando…</div></div>
+  </div>
+</section>
+
 <iframe id="printFrame" style="position:absolute;width:0;height:0;border:none;left:-9999px"></iframe>
 
 </div></main>
@@ -591,7 +611,7 @@ function runSelfTest(){
 const SB_URL = 'https://fuqxkssxqxthrunihieh.supabase.co';
 const SB_KEY = 'sb_publishable_VA4wF5NtVak9bQPj55uDsQ_IhtqM1MR';
 const SB_H = { 'apikey':SB_KEY, 'Authorization':'Bearer '+SB_KEY, 'Content-Type':'application/json' };
-let SESION = null; // {usuario, nombre}
+let SESION = null; // {usuario, nombre, admin}
 
 async function sbFetch(path, opts){
   const r = await fetch(SB_URL+'/rest/v1/'+path, { headers:SB_H, ...opts });
@@ -602,6 +622,14 @@ async function sbFetch(path, opts){
 async function sha256(txt){
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(txt));
   return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+// Registra una acción en la base (no bloquea si falla)
+function registrarActividad(accion, detalle){
+  if(!SESION) return;
+  sbFetch('com_actividad', { method:'POST',
+    headers:{...SB_H,'Prefer':'return=minimal'},
+    body:JSON.stringify({usuario:SESION.usuario, nombre:SESION.nombre, accion, detalle:detalle||'', cuando:new Date().toISOString()})
+  }).catch(()=>{});
 }
 
 /* ---- Login ---- */
@@ -620,7 +648,7 @@ async function intentarLogin(){
     const user=rows[0];
     const h=await sha256(p);
     if(h!==user.pass_hash){ lgErr('lgMsg','Contraseña incorrecta.'); return; }
-    SESION={usuario:user.usuario, nombre:user.nombre};
+    SESION={usuario:user.usuario, nombre:user.nombre, admin:!!user.admin};
     if(user.debe_cambiar){
       // pasar a cambio de clave obligatorio
       document.getElementById('loginBox').style.display='none';
@@ -658,6 +686,10 @@ async function entrarApp(){
     document.getElementById('chMsg').textContent='';
     mostrarLogin();
   };
+  registrarActividad('ingreso','Ingresó a la app');
+  // Solapa Actividad: solo para administrador
+  const tabAct=document.querySelector('nav.tabs button[data-tab="actividad"]');
+  if(tabAct) tabAct.style.display = SESION.admin ? '' : 'none';
   await sincronizarDesdeNube();
 }
 
@@ -694,6 +726,35 @@ async function guardarCierreNube(periodo, datos){
 async function borrarCierreNube(periodo){
   if(!SESION) return;
   await sbFetch('com_cierres?periodo=eq.'+encodeURIComponent(periodo), { method:'DELETE', headers:{...SB_H,'Prefer':'return=minimal'} });
+}
+
+/* ---- Registro de actividad (solo admin) ---- */
+async function renderActividad(){
+  if(!SESION || !SESION.admin) return;
+  const wrap=document.getElementById('actWrap');
+  wrap.innerHTML='<div class="desc">Cargando…</div>';
+  try{
+    const filas=await sbFetch('com_actividad?select=*&order=cuando.desc&limit=500');
+    const f=document.getElementById('actFiltro').value;
+    const acciones = filas.filter(x=>{
+      if(f==='all') return true;
+      if(f==='ingreso') return x.accion==='ingreso';
+      if(f==='carga') return x.accion!=='ingreso';
+      return true;
+    });
+    if(!acciones.length){ wrap.innerHTML='<div class="msg info"><span class="ic">i</span><span>Sin actividad registrada todavía.</span></div>'; return; }
+    const fmt = t => { const d=new Date(t); return d.toLocaleDateString('es-AR')+' '+d.toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'}); };
+    const etiqueta = a => a==='ingreso'?'<span style="color:#155a8a">Ingreso</span>':a==='cierre'?'<span style="color:var(--verde)">Cierre</span>':'<span style="color:#8a5a00">Carga</span>';
+    // resumen por usuario
+    const resu={}; filas.forEach(x=>{ const k=x.nombre||x.usuario; if(!resu[k])resu[k]={ing:0,car:0,ult:x.cuando}; if(x.accion==='ingreso')resu[k].ing++; else resu[k].car++; });
+    let head='<div class="pais-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin-bottom:14px">';
+    Object.entries(resu).forEach(([nom,r])=>{ head+='<div class="pais-box"><div class="lbl">'+nom+'</div><div style="font-size:13px;margin-top:4px">'+r.ing+' ingresos · '+r.car+' cargas</div><div class="sub">último: '+fmt(r.ult)+'</div></div>'; });
+    head+='</div>';
+    let h=head+'<div class="tbl-scroll" style="max-height:520px"><table class="dt"><thead><tr><th>Fecha y hora</th><th>Usuario</th><th>Acción</th><th>Detalle</th></tr></thead><tbody>';
+    acciones.forEach(x=>{ h+='<tr><td class="mono">'+fmt(x.cuando)+'</td><td>'+(x.nombre||x.usuario)+'</td><td>'+etiqueta(x.accion)+'</td><td>'+(x.detalle||'')+'</td></tr>'; });
+    h+='</tbody></table></div>';
+    wrap.innerHTML=h;
+  }catch(e){ wrap.innerHTML='<div class="msg warn"><span class="ic">!</span><span>No se pudo cargar la actividad: '+e.message+'</span></div>'; }
 }
 
 const DB_KEY='aca_comisiones_db_v1';
@@ -866,8 +927,11 @@ document.querySelectorAll('nav.tabs button').forEach(b=>{
     b.classList.add('on');
     document.querySelectorAll('.panel').forEach(p=>p.classList.remove('on'));
     document.getElementById('tab-'+b.dataset.tab).classList.add('on');
+    if(b.dataset.tab==='actividad') renderActividad();
   };
 });
+document.getElementById('btnActRefrescar').onclick=renderActividad;
+document.getElementById('actFiltro').onchange=renderActividad;
 document.querySelectorAll('.sub-tabs button[data-sub]').forEach(b=>{
   b.onclick=()=>{
     b.parentElement.querySelectorAll('button').forEach(x=>x.classList.remove('on'));
@@ -1036,7 +1100,7 @@ document.getElementById('btnGuardar').onclick=()=>{
   renderHistorico();
   // guardar también en la base del equipo (compartido, con autor)
   guardarCierreNube(ST.periodo, cierre)
-    .then(()=> toast('Cierre '+ST.periodo+' guardado en la base del equipo por '+SESION.nombre+'.','ok'))
+    .then(()=>{ registrarActividad('cierre','Guardó el cierre '+ST.periodo); toast('Cierre '+ST.periodo+' guardado en la base del equipo por '+SESION.nombre+'.','ok'); })
     .catch(e=> toast('Guardado local OK, pero no se pudo subir a la base del equipo: '+e.message,'warn'));
 };
 
@@ -1409,7 +1473,7 @@ document.getElementById('fileCR').onchange=e=>{
   const f=e.target.files[0]; if(!f) return;
   readSheet(f, rows=>{
     try{ const arr=parseCRTable(rows); DB.crTable=arr; saveDB(DB);
-      guardarMaestraNube('cr', arr).then(()=>toast('Tabla de CR compartida con el equipo.','ok')).catch(()=>{});
+      guardarMaestraNube('cr', arr).then(()=>{ registrarActividad('cr','Actualizó la tabla de CR ('+arr.length+')'); toast('Tabla de CR compartida con el equipo.','ok'); }).catch(()=>{});
       document.getElementById('dropCR').classList.add('ok');
       document.getElementById('fileCRName').textContent=f.name;
       document.getElementById('crInfo').innerHTML='<span style="color:var(--verde);font-weight:600">✓ '+arr.length+' CR cargados.</span>';
@@ -1421,7 +1485,7 @@ document.getElementById('filePers').onchange=e=>{
   readSheet(f, rows=>{
     try{ const arr=parsePersonal(rows); DB.personal=arr;
       DB.personalNombres=parsePersonalNombres(rows); saveDB(DB);
-      guardarMaestraNube('personal', {personal:arr, personalNombres:DB.personalNombres}).then(()=>toast('Personal compartido con el equipo.','ok')).catch(()=>{});
+      guardarMaestraNube('personal', {personal:arr, personalNombres:DB.personalNombres}).then(()=>{ registrarActividad('personal','Actualizó la tabla de Personal ('+arr.length+')'); toast('Personal compartido con el equipo.','ok'); }).catch(()=>{});
       document.getElementById('dropPers').classList.add('ok');
       document.getElementById('filePersName').textContent=f.name;
       const nCR=Object.keys(jefeMap()).length;
@@ -1439,7 +1503,7 @@ document.getElementById('fileBase0').onchange=e=>{
   const f=e.target.files[0]; if(!f) return;
   readSheet(f, rows=>{
     const m=parseCartera(rows); DB.carteraBase=m; saveDB(DB);
-    guardarMaestraNube('carteraBase', m).then(()=>toast('Cartera línea base compartida con el equipo.','ok')).catch(()=>{});
+    guardarMaestraNube('carteraBase', m).then(()=>{ registrarActividad('carteraBase','Actualizó la cartera línea base ('+Object.keys(m).length+' CR)'); toast('Cartera línea base compartida con el equipo.','ok'); }).catch(()=>{});
     document.getElementById('dropBase0').classList.add('ok');
     document.getElementById('fileBase0Name').textContent=f.name;
     document.getElementById('base0Info').innerHTML='<span style="color:var(--verde);font-weight:600">✓ '+Object.keys(m).length+' CR de línea base.</span>';
