@@ -197,6 +197,9 @@ tr.top3 td{background:#fffdf5}
 .user-chip{display:inline-flex;align-items:center;gap:8px;background:rgba(255,255,255,.15);color:#fff;border-radius:999px;padding:5px 12px;font-size:12.5px;font-weight:600}
 .user-chip .lnk{color:#ffe08a;cursor:pointer;text-decoration:underline;font-weight:600}
 .sync-chip{font-size:11px;color:#a9c8e0;margin-left:4px}
+#modoCierre{background:#eaf4ec;border-bottom:1px solid #cbe6d3;color:#155a34;padding:8px 20px;font-size:13px;font-weight:600;display:flex;align-items:center;gap:10px}
+#modoCierre .lock{background:#1e7d45;color:#fff;border-radius:6px;padding:2px 8px;font-size:11px}
+#modoCierre .x{margin-left:auto;color:#155a34;cursor:pointer;text-decoration:underline;font-weight:600}
 </style>
 </head>
 <body>
@@ -250,6 +253,7 @@ tr.top3 td{background:#fffdf5}
   <button data-tab="maestras" style="--acc:#475569">Tablas maestras</button>
   <button data-tab="actividad" style="--acc:#b03a5b;display:none">Actividad</button>
 </div></nav>
+<div id="modoCierre" style="display:none"></div>
 
 <main><div class="wrap">
 
@@ -569,7 +573,17 @@ function clasificarOperadoresCentrales(base, esComisionable){
   }
   const centrales=new Set();
   for(const m in tally){ if(tally[m].central>tally[m].com) centrales.add(m); }
+  // Rescatados: matrículas que SIEMPRE comisionan (permanentes + de esta sesión)
+  const rescatados = rescatadosActivos();
+  rescatados.forEach(m=> centrales.delete(String(m)));
   return centrales;
+}
+// conjunto de matrículas rescatadas activas (permanentes de la nube + temporales de la sesión)
+function rescatadosActivos(){
+  const s=new Set();
+  (DB.overrides||[]).forEach(o=> s.add(String(o.matricula)));
+  (ST.overridesMes||[]).forEach(m=> s.add(String(m)));
+  return s;
 }
 function comisionVendedores(base, prima, esComisionable, centrales){
   esComisionable = esComisionable || (()=>true);
@@ -730,6 +744,7 @@ async function sincronizarDesdeNube(){
       sbFetch('com_maestras?select=*'),
       sbFetch('com_cierres?select=periodo,datos,cargado_por,cargado_nom,actualizado&order=periodo.desc')
     ]);
+    await cargarOverridesNube();
     const m={}; (maes||[]).forEach(x=> m[x.clave]=x.datos);
     DB.crTable    = m.cr || DB.crTable;
     if(m.personal){ DB.personal = m.personal.personal||m.personal; DB.personalNombres = m.personal.personalNombres||DB.personalNombres; }
@@ -759,6 +774,23 @@ async function guardarCierreNube(periodo, datos){
 async function borrarCierreNube(periodo){
   if(!SESION) return;
   await sbFetch('com_cierres?periodo=eq.'+encodeURIComponent(periodo), { method:'DELETE', headers:{...SB_H,'Prefer':'return=minimal'} });
+}
+
+/* ---- Rescatados permanentes (overrides) ---- */
+async function cargarOverridesNube(){
+  try{ DB.overrides = await sbFetch('com_overrides?select=*&order=cuando.desc'); }catch(e){ DB.overrides = DB.overrides||[]; }
+}
+async function agregarOverrideNube(matricula, nombre){
+  if(!SESION) return;
+  await sbFetch('com_overrides', { method:'POST',
+    headers:{...SB_H,'Prefer':'resolution=merge-duplicates,return=minimal'},
+    body:JSON.stringify({matricula:String(matricula), nombre:nombre||'', cargado_por:SESION.usuario, cargado_nom:SESION.nombre, cuando:new Date().toISOString()}) });
+  await cargarOverridesNube();
+}
+async function quitarOverrideNube(matricula){
+  if(!SESION) return;
+  await sbFetch('com_overrides?matricula=eq.'+encodeURIComponent(String(matricula)), { method:'DELETE', headers:{...SB_H,'Prefer':'return=minimal'} });
+  await cargarOverridesNube();
 }
 
 /* ---- Registro de actividad (solo admin) ---- */
@@ -802,7 +834,7 @@ function saveDB(db){
 let DB = loadDB();
 
 /* ================= ESTADO EN MEMORIA ================= */
-let ST = { periodo:'', prima:0, desde:'', hasta:'', dias:0, base:null, cartera:null, calc:null };
+let ST = { periodo:'', prima:0, desde:'', hasta:'', dias:0, base:null, cartera:null, calc:null, overridesMes:[] };
 
 /* ================= HELPERS DE PARSEO XLSX ================= */
 function parseCSVText(text){
@@ -1106,19 +1138,21 @@ function recalcularTodo(){
     const centrales=clasificarOperadoresCentrales(ST.base.rows, esComisionable);
     centralesSet=centrales;
     vendCalc=comisionVendedores(ST.base.rows, ST.prima, esComisionable, centrales);
-    // Detalle de operadores CAT/WEB y su aporte a la producción comercial (para conciliar informe vs comisión)
+    // Detalle de operadores CAT/WEB y su aporte (para conciliar informe vs comisión, con columnas completas)
     const det={};
     let ventasExc=0;
     for(const r of ST.base.rows){
       if(!centrales.has(r.matricula)) continue;
       if(r.genuino) ventasExc++;
-      if(esComisionable(r.cr)){ // producción que SÍ figura en el informe comercial pero no cobra
-        const m=String(r.matricula);
-        if(!det[m]) det[m]={matricula:m, gen:0, no:0};
-        if(r.genuino) det[m].gen++; else det[m].no++;
-      }
+      const m=String(r.matricula);
+      if(!det[m]) det[m]={matricula:m, gen:0, no:0, total:0, crs:{}};
+      det[m].total++;
+      if(r.genuino){ det[m].gen++; det[m].crs[r.cr]=(det[m].crs[r.cr]||0)+1; } else det[m].no++;
     }
-    excluidosDetalle=Object.values(det).filter(d=>d.gen>0||d.no>0).sort((a,b)=>(b.gen+b.no)-(a.gen+a.no));
+    excluidosDetalle=Object.values(det).filter(d=>d.gen>0||d.no>0).map(d=>{
+      let crP=null,mx=-1; for(const cr in d.crs){ if(d.crs[cr]>mx){mx=d.crs[cr];crP=Number(cr);} }
+      return {...d, cr:crP};
+    }).sort((a,b)=>(b.gen+b.no)-(a.gen+a.no));
     centralesInfo={ops:centrales.size, ventas:ventasExc,
       genComercial:excluidosDetalle.reduce((s,d)=>s+d.gen,0),
       noComercial:excluidosDetalle.reduce((s,d)=>s+d.no,0)};
@@ -1137,7 +1171,7 @@ function recalcularTodo(){
   if(!ST.base.tieneMatricula) toast('La base no trae matrícula: la comisión por vendedor no se calcula este mes.','warn');
   toast('Cálculo listo. Revisá la solapa Comisiones.','ok');
 }
-document.getElementById('btnCalcular').onclick=()=>{ if(ST.base) recalcularTodo(); };
+document.getElementById('btnCalcular').onclick=()=>{ if(ST.base){ ocultarModoCierre(); recalcularTodo(); } };
 
 /* ================= EVOLUCIÓN: snapshot por GD / dependencia / jefe ================= */
 function construirEvolucion(rows, gd, oficina){
@@ -1216,6 +1250,7 @@ document.getElementById('btnNuevoProceso').onclick=()=>{
   ['comisionesContent','informeContent','topContent'].forEach(id=>{ const e=document.getElementById(id); if(e) e.style.display='none'; });
   document.getElementById('calcState').textContent='';
   refreshBadge();
+  ocultarModoCierre();
   document.querySelector('nav.tabs button[data-tab="cargar"]').click();
   toast('Pantalla blanqueada. Cargá el nuevo mes.','ok');
 };
@@ -1237,8 +1272,11 @@ function abrirCierre(periodo){
       dvMap: c.dvMap||{}, premioEnCentavos: !!c.premioEnCentavos
     };
     recalcularTodo(); // usa ST.base + ST.prima como si acabaras de calcular
+    // pre-renderizar TODAS las vistas para que ninguna aparezca vacía
+    try{ renderInforme(); renderTop(); if(typeof renderEvolucion==='function') renderEvolucion(); }catch(e){}
     refreshBadge();
-    toast('Cierre '+periodo+' abierto completo ('+(c.guardado_por||'—')+'). Informe, Top y Comisiones reconstruidos.','ok');
+    mostrarModoCierre(c);
+    toast('Cierre '+periodo+' abierto completo ('+(c.guardado_por||'—')+'). Comisiones, Informe, Top y Evolución reconstruidos.','ok');
     document.querySelector('nav.tabs button[data-tab="comisiones"]').click();
     return;
   }
@@ -1255,6 +1293,13 @@ function abrirCierre(periodo){
   }
   toast('Este cierre no tiene datos para reabrir.','warn');
 }
+function mostrarModoCierre(c){
+  const el=document.getElementById('modoCierre'); if(!el) return;
+  const corte = c.desde?(c.desde+' a '+c.hasta+' · '+(c.dias||'?')+' días'):'mes completo';
+  el.style.display='flex';
+  el.innerHTML='<span class="lock">🔒 Cierre guardado</span> Estás viendo <b>'+c.periodo+'</b> ('+corte+')'+(c.guardado_por?(' guardado por '+c.guardado_por):'')+'. No se modifica hasta que cargues un mes nuevo. <span class="x" onclick="document.querySelector(\'nav.tabs button[data-tab=cargar]\').click()">Cargar un mes nuevo</span>';
+}
+function ocultarModoCierre(){ const el=document.getElementById('modoCierre'); if(el) el.style.display='none'; }
 
 /* ================= RENDER COMISIONES ================= */
 function renderComisiones(){
@@ -1306,19 +1351,64 @@ function renderVend(q){
   const ci=c.centralesInfo||{ops:0,ventas:0};
   const det=c.excluidosDetalle||[];
   if(ci.ops>0){
-    h+='<div class="msg warn" style="margin-top:12px"><span class="ic">!</span><span><b>'+ci.ops+' operadores de CAT/WEB quedan fuera de comisión</b> — no pertenecen a ninguna Gerencia Divisional. En total aportaron '+num(ci.ventas)+' ventas genuinas (en sus propios canales CAT/WEB), que se tratan como dato y no se pagan.</span></div>';
+    h+='<div class="msg warn" style="margin-top:12px"><span class="ic">!</span><span><b>'+ci.ops+' operadores de CAT/WEB quedan fuera de comisión</b> — no pertenecen a ninguna Gerencia Divisional. Si alguno en realidad corresponde que comisione, rescatalo con el botón "Incluir".</span></div>';
     if(det.length){
-      h+='<div class="foot-note" style="margin-top:4px"><b>Conciliación con el informe:</b> estos operadores CAT/WEB además cargaron algunas pólizas en CRs comerciales, por eso el informe muestra más producción que la tabla de comisión. Detalle por matrícula:</div>';
-      h+='<div class="tbl-scroll" style="max-height:240px;margin-top:6px"><table class="dt"><thead><tr><th>Matrícula</th><th>Vendedor</th><th class="r">Genuinas en CR comercial</th><th class="r">No genuinas en CR comercial</th></tr></thead><tbody>';
-      let tg=0,tn=0;
+      h+='<div class="foot-note" style="margin-top:4px"><b>Conciliación con el informe:</b> operadores excluidos con producción, con las mismas columnas que la tabla de comisiones.</div>';
+      h+='<div class="tbl-scroll" style="max-height:300px;margin-top:6px"><table class="dt"><thead><tr><th>Matrícula</th><th>Vendedor</th><th>Dependencia / Gerencia</th><th class="r">Pólizas totales</th><th class="r">No genuinas</th><th class="r">Genuinas</th><th></th></tr></thead><tbody>';
+      let tg=0,tn=0,tt=0;
       det.forEach(d=>{ const nom=nombreDe(d.matricula)||'<span style="color:#9a6a00">sin nombre</span>';
-        h+='<tr><td class="mono">'+d.matricula+'</td><td>'+nom+'</td><td class="r mono">'+num(d.gen)+'</td><td class="r mono">'+num(d.no)+'</td></tr>'; tg+=d.gen;tn+=d.no; });
-      h+='<tr class="total"><td colspan="2">Total descontado del informe comercial</td><td class="r mono">'+num(tg)+'</td><td class="r mono">'+num(tn)+'</td></tr>';
+        const ofi = d.cr!=null ? (c.oficina[d.cr]||('CR '+d.cr)) : '—';
+        const ger = d.cr!=null ? prettyGD(c.gd[d.cr]||'') : '';
+        const depCell = '<div>'+ofi+'</div>'+(ger?'<div style="font-size:10.5px;color:var(--gris)">'+ger+'</div>':'');
+        h+='<tr><td class="mono">'+d.matricula+'</td><td>'+nom+'</td><td>'+depCell+'</td>'+
+           '<td class="r mono">'+num(d.total)+'</td><td class="r mono" style="color:var(--gris)">'+num(d.no)+'</td>'+
+           '<td class="r mono" style="color:var(--verde);font-weight:700">'+num(d.gen)+'</td>'+
+           '<td class="r"><button class="btn ghost sm" onclick="rescatarMatricula(\''+d.matricula+'\')">Incluir</button></td></tr>';
+        tg+=d.gen;tn+=d.no;tt+=d.total; });
+      h+='<tr class="total"><td colspan="3">Total excluido</td><td class="r mono">'+num(tt)+'</td><td class="r mono">'+num(tn)+'</td><td class="r mono">'+num(tg)+'</td><td></td></tr>';
       h+='</tbody></table></div>';
-      h+='<div class="foot-note">Es decir: informe comercial ('+num(tg)+'+ genuinas de CAT/WEB) − comisión = coincide. La diferencia de genuinas entre informe y comisión es exactamente '+num(tg)+', y la de no genuinas '+num(tn)+'.</div>';
     }
   }
+  // Panel de rescate: tipear una matrícula
+  h+='<div class="card" style="margin-top:12px;background:#f7fafc">'+
+     '<div class="flexbar"><div><b>Rescatar una matrícula</b><div class="desc" style="margin:0">Incluí en comisión a alguien que el sistema excluyó como CAT/WEB.</div></div></div>'+
+     '<div class="btn-row" style="gap:8px;align-items:flex-end;flex-wrap:wrap">'+
+     '<div><label class="fld">Matrícula</label><input type="text" id="inpRescate" class="txt" style="width:140px" placeholder="ej: 19579"></div>'+
+     '<button class="btn amar sm" onclick="rescatarDesdeInput()">Incluir en comisión</button></div>';
+  // Lista de rescatados permanentes
+  const perm=DB.overrides||[];
+  if(perm.length){
+    h+='<div class="foot-note" style="margin-top:12px"><b>Rescatados permanentes</b> (siempre comisionan, compartido con el equipo):</div>';
+    h+='<div class="tbl-scroll" style="max-height:200px"><table class="dt"><thead><tr><th>Matrícula</th><th>Vendedor</th><th>Agregó</th><th></th></tr></thead><tbody>';
+    perm.forEach(o=>{ h+='<tr><td class="mono">'+o.matricula+'</td><td>'+(o.nombre||nombreDe(o.matricula)||'—')+'</td><td style="font-size:11px;color:var(--gris)">'+(o.cargado_nom||'')+'</td><td class="r"><button class="btn ghost sm" onclick="quitarRescate(\''+o.matricula+'\')">Quitar</button></td></tr>'; });
+    h+='</tbody></table></div>';
+  }
+  h+='</div>';
   document.getElementById('vendWrap').innerHTML=h;
+}
+
+/* ---- Acciones de rescate ---- */
+function rescatarDesdeInput(){
+  const el=document.getElementById('inpRescate'); if(!el) return;
+  const m=el.value.trim(); if(!m){ toast('Escribí una matrícula.','warn'); return; }
+  rescatarMatricula(m);
+}
+function rescatarMatricula(m){
+  m=String(m).trim();
+  const nom=nombreDe(m)||'';
+  const permanente = confirm('¿Rescatar la matrícula '+m+(nom?(' ('+nom+')'):'')+'?\n\nAceptar = PERMANENTE (siempre comisiona, se guarda para el equipo).\nCancelar = te pregunto si es solo por este mes.');
+  if(permanente){
+    agregarOverrideNube(m, nom).then(()=>{ registrarActividad('override','Rescató permanente '+m); toast('Matrícula '+m+' rescatada de forma permanente.','ok'); recalcularTodo(); })
+      .catch(e=> toast('No se pudo guardar el rescate: '+e.message,'err'));
+  }else{
+    const soloMes = confirm('¿Incluir '+m+' SOLO por este mes/cálculo?\n\nAceptar = solo este mes.\nCancelar = no hacer nada.');
+    if(soloMes){ if(!ST.overridesMes) ST.overridesMes=[]; if(!ST.overridesMes.includes(m)) ST.overridesMes.push(m); toast('Matrícula '+m+' incluida solo por este cálculo.','ok'); recalcularTodo(); }
+  }
+}
+function quitarRescate(m){
+  if(!confirm('¿Quitar la matrícula '+m+' de los rescatados permanentes? Volverá a excluirse si el sistema la clasifica como CAT/WEB.')) return;
+  quitarOverrideNube(m).then(()=>{ registrarActividad('override','Quitó rescate '+m); toast('Matrícula '+m+' quitada de rescatados.','ok'); recalcularTodo(); })
+    .catch(e=> toast('No se pudo quitar: '+e.message,'err'));
 }
 function renderJefe(q){
   const c=ST.calc; q=up(q);
