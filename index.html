@@ -747,7 +747,7 @@ async function sincronizarDesdeNube(){
     await cargarOverridesNube();
     const m={}; (maes||[]).forEach(x=> m[x.clave]=x.datos);
     DB.crTable    = m.cr || DB.crTable;
-    if(m.personal){ DB.personal = m.personal.personal||m.personal; DB.personalNombres = m.personal.personalNombres||DB.personalNombres; }
+    if(m.personal){ DB.personal = m.personal.personal||m.personal; DB.personalNombres = m.personal.personalNombres||DB.personalNombres; DB.personalOrigen = m.personal.personalOrigen||DB.personalOrigen; }
     DB.carteraBase= m.carteraBase || DB.carteraBase;
     DB.cierres = (cierres||[]).map(c=> ({...c.datos, periodo:c.periodo, cargado_por:c.cargado_por, cargado_nom:c.cargado_nom, actualizado:c.actualizado}));
     // refrescar vistas dependientes si existen
@@ -983,6 +983,29 @@ function parsePersonalNombres(rows){
     if(!(String(mat) in m)) m[String(mat)]=norm(row[iNom]);
   }
   return m;
+}
+// De dónde es realmente cada productor (filial/divisional de origen en Personal)
+// Ojo: la tabla tiene DOS columnas 'Filial'. La de origen del productor es la col 4,
+// y la divisional de origen es la col 11 (ej: CAT/ALMAGRO para operadores de CAT).
+function parsePersonalOrigen(rows){
+  const hi=findHeaderRow(rows,['RESPONSABILIDAD','MATRICULA']); const start=hi>=0?hi+1:2;
+  let iMat=6, iFilial=4, iDiv=11;
+  const m={};
+  for(let r=start;r<rows.length;r++){
+    const row=rows[r]; if(!row) continue;
+    const mat=row[iMat]; if(mat==null||mat==='') continue;
+    const k=String(mat);
+    if(!(k in m)){
+      const filial=norm(row[iFilial]); const div=norm(row[iDiv]);
+      m[k]={filial, div};
+    }
+  }
+  return m;
+}
+function origenDe(mat){
+  const o=(DB.personalOrigen||{})[String(mat)];
+  if(!o) return null;
+  return o;
 }
 
 /* ================= UI: navegación ================= */
@@ -1356,19 +1379,29 @@ function renderVend(q){
   if(ci.ops>0){
     h+='<div class="msg warn" style="margin-top:12px"><span class="ic">!</span><span><b>'+ci.ops+' operadores de CAT/WEB quedan fuera de comisión</b> — no pertenecen a ninguna Gerencia Divisional. Si alguno en realidad corresponde que comisione, rescatalo con el botón "Incluir".</span></div>';
     if(det.length){
-      h+='<div class="foot-note" style="margin-top:4px"><b>Conciliación con el informe:</b> operadores excluidos con producción, con las mismas columnas que la tabla de comisiones.</div>';
-      h+='<div class="tbl-scroll" style="max-height:300px;margin-top:6px"><table class="dt"><thead><tr><th>Matrícula</th><th>Vendedor</th><th>Dependencia / Gerencia</th><th class="r">Pólizas totales</th><th class="r">No genuinas</th><th class="r">Genuinas</th><th></th></tr></thead><tbody>';
+      h+='<div class="foot-note" style="margin-top:4px"><b>Contraste imputación vs productor:</b> el seguro se asignó a una dependencia comercial, pero la persona que lo produjo pertenece a un canal central. Por eso no comisiona. Decidí si corresponde incluirlo.</div>';
+      h+='<div class="tbl-scroll" style="max-height:300px;margin-top:6px"><table class="dt"><thead><tr><th>Matrícula</th><th>Vendedor</th><th>Seguro imputado en (comercial)</th><th>Pero el productor es de</th><th class="r">Genuinas</th><th></th></tr></thead><tbody>';
       let tg=0,tn=0,tt=0;
       det.forEach(d=>{ const nom=nombreDe(d.matricula)||'<span style="color:#9a6a00">sin nombre</span>';
         const ofi = d.cr!=null ? (c.oficina[d.cr]||('CR '+d.cr)) : '—';
         const ger = d.cr!=null ? prettyGD(c.gd[d.cr]||'') : '';
-        const depCell = '<div>'+ofi+'</div>'+(ger?'<div style="font-size:10.5px;color:var(--gris)">'+ger+'</div>':'');
-        h+='<tr><td class="mono">'+d.matricula+'</td><td>'+nom+'</td><td>'+depCell+'</td>'+
-           '<td class="r mono">'+num(d.total)+'</td><td class="r mono" style="color:var(--gris)">'+num(d.no)+'</td>'+
+        const impCell = '<div>'+ofi+'</div>'+(ger?'<div style="font-size:10.5px;color:var(--gris)">'+ger+'</div>':'');
+        const org = origenDe(d.matricula);
+        // Unificar: si el origen es Centro de Atención / CAT en cualquier variante, mostrar "CAT"
+        const esCAT = o => { const t=up((o||'')); return t.includes('CENTRO DE ATENCION')||t.includes('CENTRO DE ATENCIÓN')||t.includes('CAT'); };
+        let orgCell;
+        if(org && (esCAT(org.filial)||esCAT(org.div))){
+          orgCell = '<div style="color:#b03a5b;font-weight:600">CAT</div>';
+        } else if(org){
+          orgCell = '<div style="color:#b03a5b;font-weight:600">'+(org.filial||'—')+'</div>'+(org.div?'<div style="font-size:10.5px;color:var(--gris)">'+org.div+'</div>':'');
+        } else {
+          orgCell = '<span style="color:#9a6a00">no figura en Personal</span>';
+        }
+        h+='<tr><td class="mono">'+d.matricula+'</td><td>'+nom+'</td><td>'+impCell+'</td><td>'+orgCell+'</td>'+
            '<td class="r mono" style="color:var(--verde);font-weight:700">'+num(d.gen)+'</td>'+
            '<td class="r"><button class="btn ghost sm" onclick="rescatarMatricula(\''+d.matricula+'\')">Incluir</button></td></tr>';
         tg+=d.gen;tn+=d.no;tt+=d.total; });
-      h+='<tr class="total"><td colspan="3">Total excluido</td><td class="r mono">'+num(tt)+'</td><td class="r mono">'+num(tn)+'</td><td class="r mono">'+num(tg)+'</td><td></td></tr>';
+      h+='<tr class="total"><td colspan="4">Total excluido</td><td class="r mono">'+num(tg)+'</td><td></td></tr>';
       h+='</tbody></table></div>';
     }
   }
@@ -1837,8 +1870,8 @@ document.getElementById('filePers').onchange=e=>{
   const f=e.target.files[0]; if(!f) return;
   readSheet(f, rows=>{
     try{ const arr=parsePersonal(rows); DB.personal=arr;
-      DB.personalNombres=parsePersonalNombres(rows); saveDB(DB);
-      guardarMaestraNube('personal', {personal:arr, personalNombres:DB.personalNombres}).then(()=>{ registrarActividad('personal','Actualizó la tabla de Personal ('+arr.length+')'); toast('Personal compartido con el equipo.','ok'); }).catch(e=>toast('Personal cargado en pantalla, pero NO se pudo guardar en la nube: '+e.message,'err'));
+      DB.personalNombres=parsePersonalNombres(rows); DB.personalOrigen=parsePersonalOrigen(rows); saveDB(DB);
+      guardarMaestraNube('personal', {personal:arr, personalNombres:DB.personalNombres, personalOrigen:DB.personalOrigen}).then(()=>{ registrarActividad('personal','Actualizó la tabla de Personal ('+arr.length+')'); toast('Personal compartido con el equipo.','ok'); }).catch(e=>toast('Personal cargado en pantalla, pero NO se pudo guardar en la nube: '+e.message,'err'));
       document.getElementById('dropPers').classList.add('ok');
       document.getElementById('filePersName').textContent=f.name;
       const nCR=Object.keys(jefeMap()).length;
