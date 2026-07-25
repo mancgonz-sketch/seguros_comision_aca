@@ -713,14 +713,17 @@ async function sincronizarDesdeNube(){
 }
 async function guardarMaestraNube(clave, datos){
   if(!SESION) return;
+  // Borrar la clave si existe y volver a insertar (más robusto que upsert)
+  await sbFetch('com_maestras?clave=eq.'+encodeURIComponent(clave), { method:'DELETE', headers:{...SB_H,'Prefer':'return=minimal'} });
   await sbFetch('com_maestras', { method:'POST',
-    headers:{...SB_H,'Prefer':'resolution=merge-duplicates,return=minimal'},
+    headers:{...SB_H,'Prefer':'return=minimal'},
     body:JSON.stringify({clave, datos, cargado_por:SESION.usuario, cargado_nom:SESION.nombre, actualizado:new Date().toISOString()}) });
 }
 async function guardarCierreNube(periodo, datos){
   if(!SESION) return;
+  await sbFetch('com_cierres?periodo=eq.'+encodeURIComponent(periodo), { method:'DELETE', headers:{...SB_H,'Prefer':'return=minimal'} });
   await sbFetch('com_cierres', { method:'POST',
-    headers:{...SB_H,'Prefer':'resolution=merge-duplicates,return=minimal'},
+    headers:{...SB_H,'Prefer':'return=minimal'},
     body:JSON.stringify({periodo, datos, cargado_por:SESION.usuario, cargado_nom:SESION.nombre, actualizado:new Date().toISOString()}) });
 }
 async function borrarCierreNube(periodo){
@@ -1473,7 +1476,7 @@ document.getElementById('fileCR').onchange=e=>{
   const f=e.target.files[0]; if(!f) return;
   readSheet(f, rows=>{
     try{ const arr=parseCRTable(rows); DB.crTable=arr; saveDB(DB);
-      guardarMaestraNube('cr', arr).then(()=>{ registrarActividad('cr','Actualizó la tabla de CR ('+arr.length+')'); toast('Tabla de CR compartida con el equipo.','ok'); }).catch(()=>{});
+      guardarMaestraNube('cr', arr).then(()=>{ registrarActividad('cr','Actualizó la tabla de CR ('+arr.length+')'); toast('Tabla de CR compartida con el equipo.','ok'); }).catch(e=>toast('CR cargado en pantalla, pero NO se pudo guardar en la nube: '+e.message,'err'));
       document.getElementById('dropCR').classList.add('ok');
       document.getElementById('fileCRName').textContent=f.name;
       document.getElementById('crInfo').innerHTML='<span style="color:var(--verde);font-weight:600">✓ '+arr.length+' CR cargados.</span>';
@@ -1485,7 +1488,7 @@ document.getElementById('filePers').onchange=e=>{
   readSheet(f, rows=>{
     try{ const arr=parsePersonal(rows); DB.personal=arr;
       DB.personalNombres=parsePersonalNombres(rows); saveDB(DB);
-      guardarMaestraNube('personal', {personal:arr, personalNombres:DB.personalNombres}).then(()=>{ registrarActividad('personal','Actualizó la tabla de Personal ('+arr.length+')'); toast('Personal compartido con el equipo.','ok'); }).catch(()=>{});
+      guardarMaestraNube('personal', {personal:arr, personalNombres:DB.personalNombres}).then(()=>{ registrarActividad('personal','Actualizó la tabla de Personal ('+arr.length+')'); toast('Personal compartido con el equipo.','ok'); }).catch(e=>toast('Personal cargado en pantalla, pero NO se pudo guardar en la nube: '+e.message,'err'));
       document.getElementById('dropPers').classList.add('ok');
       document.getElementById('filePersName').textContent=f.name;
       const nCR=Object.keys(jefeMap()).length;
@@ -1503,7 +1506,7 @@ document.getElementById('fileBase0').onchange=e=>{
   const f=e.target.files[0]; if(!f) return;
   readSheet(f, rows=>{
     const m=parseCartera(rows); DB.carteraBase=m; saveDB(DB);
-    guardarMaestraNube('carteraBase', m).then(()=>{ registrarActividad('carteraBase','Actualizó la cartera línea base ('+Object.keys(m).length+' CR)'); toast('Cartera línea base compartida con el equipo.','ok'); }).catch(()=>{});
+    guardarMaestraNube('carteraBase', m).then(()=>{ registrarActividad('carteraBase','Actualizó la cartera línea base ('+Object.keys(m).length+' CR)'); toast('Cartera línea base compartida con el equipo.','ok'); }).catch(e=>toast('Cartera cargada en pantalla, pero NO se pudo guardar en la nube: '+e.message,'err'));
     document.getElementById('dropBase0').classList.add('ok');
     document.getElementById('fileBase0Name').textContent=f.name;
     document.getElementById('base0Info').innerHTML='<span style="color:var(--verde);font-weight:600">✓ '+Object.keys(m).length+' CR de línea base.</span>';
