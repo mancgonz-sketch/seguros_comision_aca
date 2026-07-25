@@ -1087,7 +1087,7 @@ function carteraPreviaPara(periodo){
 }
 
 /* ================= CALCULAR ================= */
-document.getElementById('btnCalcular').onclick=()=>{
+function recalcularTodo(){
   const {oficina,gd}=crMaps();
   const jm=jefeMap();
   const esComisionable = cr => GD_COM.includes(gd[cr]);  // solo las 7 GD comerciales; excluye CAT/WEB y áreas centrales
@@ -1136,7 +1136,8 @@ document.getElementById('btnCalcular').onclick=()=>{
   if(avisoCartera) toast(avisoCartera,'warn');
   if(!ST.base.tieneMatricula) toast('La base no trae matrícula: la comisión por vendedor no se calcula este mes.','warn');
   toast('Cálculo listo. Revisá la solapa Comisiones.','ok');
-};
+}
+document.getElementById('btnCalcular').onclick=()=>{ if(ST.base) recalcularTodo(); };
 
 /* ================= EVOLUCIÓN: snapshot por GD / dependencia / jefe ================= */
 function construirEvolucion(rows, gd, oficina){
@@ -1184,6 +1185,9 @@ document.getElementById('btnGuardar').onclick=()=>{
     detalle:{ vend:ST.calc.vend, jefes:ST.calc.jefe.jefes, excluidosDetalle:ST.calc.excluidosDetalle, centralesInfo:ST.calc.centralesInfo, tieneMat:ST.calc.tieneMat },
     // Snapshot para evolución (genuinos por GD/dependencia/jefe)
     evol:ST.calc.evol,
+    // Base cruda compacta: permite reconstruir TODO (informe, top, export) al reabrir
+    baseRows: ST.base.rows.map(r=>({c:r.cr, g:r.genuino?1:0, p:r.premio, m:r.matricula||'', v:r.vendedor||''})),
+    tieneMatricula: ST.base.tieneMatricula, dvMap: (ST.base.dvMap||{}), premioEnCentavos: !!ST.base.premioEnCentavos,
     guardado:new Date().toISOString(), guardado_por:(SESION?SESION.nombre:'') };
   DB.cierres = (DB.cierres||[]).filter(c=>c.periodo!==ST.periodo);
   DB.cierres.push(cierre);
@@ -1219,18 +1223,37 @@ document.getElementById('btnNuevoProceso').onclick=()=>{
 /* ================= ABRIR UN CIERRE GUARDADO (ver detalle) ================= */
 function abrirCierre(periodo){
   const c=(DB.cierres||[]).find(x=>x.periodo===periodo);
-  if(!c || !c.detalle){ toast('Este cierre no tiene detalle guardado (es anterior a esta función).','warn'); return; }
+  if(!c){ toast('No encuentro ese cierre.','warn'); return; }
   ST.periodo=c.periodo; ST.prima=c.prima; ST.desde=c.desde||''; ST.hasta=c.hasta||''; ST.dias=c.dias||0;
-  const {oficina, gd}=crMaps();
-  ST.calc = {
-    vend:c.detalle.vend||[], jefe:{jefes:c.detalle.jefes||[]},
-    excluidosDetalle:c.detalle.excluidosDetalle||[], centralesInfo:c.detalle.centralesInfo||{ops:0,ventas:0},
-    tieneMat:c.detalle.tieneMat!==false, gd, oficina, _soloDetalle:true
-  };
-  renderComisiones();
-  refreshBadge();
-  toast('Mostrando el cierre '+periodo+' ('+(c.guardado_por||'—')+').','ok');
-  document.querySelector('nav.tabs button[data-tab="comisiones"]').click();
+  // sincronizar los campos visibles
+  const set=(id,v)=>{ const el=document.getElementById(id); if(el) el.value=v||''; };
+  set('inpPeriodo',c.periodo); set('inpPrima',c.prima); set('inpDesde',c.desde); set('inpHasta',c.hasta);
+
+  if(c.baseRows && c.baseRows.length){
+    // Reconstruir la base cruda y RECALCULAR todo (informe, top, comisiones, export)
+    ST.base = {
+      rows: c.baseRows.map(r=>({cr:Number(r.c), genuino:r.g===1||r.g===true, premio:Number(r.p)||0, matricula:r.m||null, vendedor:r.v||''})),
+      tieneMatricula: c.tieneMatricula!==false,
+      dvMap: c.dvMap||{}, premioEnCentavos: !!c.premioEnCentavos
+    };
+    recalcularTodo(); // usa ST.base + ST.prima como si acabaras de calcular
+    refreshBadge();
+    toast('Cierre '+periodo+' abierto completo ('+(c.guardado_por||'—')+'). Informe, Top y Comisiones reconstruidos.','ok');
+    document.querySelector('nav.tabs button[data-tab="comisiones"]').click();
+    return;
+  }
+  // Cierres viejos sin base cruda: solo detalle de comisiones
+  if(c.detalle){
+    const {oficina, gd}=crMaps();
+    ST.calc = { vend:c.detalle.vend||[], jefe:{jefes:c.detalle.jefes||[]},
+      excluidosDetalle:c.detalle.excluidosDetalle||[], centralesInfo:c.detalle.centralesInfo||{ops:0,ventas:0},
+      tieneMat:c.detalle.tieneMat!==false, gd, oficina };
+    renderComisiones(); refreshBadge();
+    toast('Cierre '+periodo+' (solo comisiones; es anterior a la mejora de reconstrucción completa).','warn');
+    document.querySelector('nav.tabs button[data-tab="comisiones"]').click();
+    return;
+  }
+  toast('Este cierre no tiene datos para reabrir.','warn');
 }
 
 /* ================= RENDER COMISIONES ================= */
