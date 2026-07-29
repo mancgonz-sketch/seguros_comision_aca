@@ -886,9 +886,43 @@ function colIndex(headerRow, patterns){
 
 /* ================= PARSERS ================= */
 function parseBase(rows){
-  const hi=findHeaderRow(rows,['CERTIFICADO','GENUINO']);
-  if(hi<0) throw new Error('No encuentro los encabezados de la base (esperaba "Certificado" y "Genuino").');
-  const H=rows[hi];
+  const hiCoriza=findHeaderRow(rows,['CERTIFICADO','GENUINO']);
+  const hiReducido=findHeaderRow(rows,['DEPENDENCIA','MATRICULA']);
+  if(hiCoriza<0 && hiReducido<0){
+    throw new Error('No encuentro los encabezados de la base. Esperaba "Certificado"+"Genuino" (base de Coriza) o "Dependencia"+"Matricula" (planilla de ventas genuinas).');
+  }
+  // Decidir formato: es REDUCIDO si NO tiene columna Premio NI Oper.Alta (aunque tenga Certificado/Genuino)
+  let usarReducido=false, hiR=-1;
+  if(hiReducido>=0){
+    const Hr=rows[hiReducido];
+    const tienePremio = colIndex(Hr,['PREMIO','PRIMA'])>=0;
+    const tieneOperAlta = colIndex(Hr,['OPER.ALTA','OPER ALTA','OPERALTA'])>=0;
+    if(!tienePremio && !tieneOperAlta){ usarReducido=true; hiR=hiReducido; }
+  }
+  // ---- Formato REDUCIDO (planilla de ventas genuinas): matrícula ya limpia, sin premio ----
+  if(usarReducido){
+    const H=rows[hiR];
+    const iCR=colIndex(H,['DEPENDENCIA','CR']);
+    const iCert=colIndex(H,['CERTIFICADO']);
+    const iGen=colIndex(H,['GENUINO']);
+    const iMat=colIndex(H,['MATRICULA','MATRÍCULA']);
+    const out=[];
+    const dvMap={};
+    for(let r=hiR+1;r<rows.length;r++){
+      const row=rows[r]; if(!row) continue;
+      const cr=row[iCR]; if(cr==null||cr==='') continue;
+      const mat = iMat>=0 ? matriculaSinDV(row[iMat]) : null; // la base trae el dígito verificador: se saca
+      if(iMat>=0 && mat!=null){ const dv=digitoVerificador(row[iMat]); if(dv!=='' && !(mat in dvMap)) dvMap[mat]=dv; }
+      const gen = iGen>=0 ? isGenuino(row[iGen]) : true;
+      out.push({
+        certificado: iCert>=0?row[iCert]:'', cr:Number(cr), genuino:gen,
+        premio:0, matricula: mat, vendedor:''
+      });
+    }
+    return {rows:out, tieneMatricula: iMat>=0, premioEnCentavos:false, dvMap, formato:'reducido', sinPremio:true};
+  }
+  // ---- Formato CORIZA (base completa) ----
+  const hi=hiCoriza; const H=rows[hi];
   const iCert=colIndex(H,['CERTIFICADO']);
   const iCR=colIndex(H,['DEPENDENCIA PRODUCTORA','DEPENDENCIA','CR']);
   const iGen=colIndex(H,['GENUINO']);
@@ -896,7 +930,7 @@ function parseBase(rows){
   const iMat=colIndex(H,['OPER.ALTA','OPER ALTA','OPERALTA','MATRICULA','MATRÍCULA','MAT VEND','VENDEDOR MAT']);
   const iNom=colIndex(H,['APELLIDO Y NOMBRE','VENDEDOR','NOMBRE VEND']);
   const out=[];
-  const dvMap={};  // matrícula (sin DV) -> dígito verificador
+  const dvMap={};
   for(let r=hi+1;r<rows.length;r++){
     const row=rows[r]; if(!row) continue;
     const cr=row[iCR];
@@ -910,12 +944,10 @@ function parseBase(rows){
       vendedor: iNom>=0 ? norm(row[iNom]) : ''
     });
   }
-  // Detección de premios en centavos: si TODOS los premios > 0 terminan en "00",
-  // el archivo viene en centavos (x100). En ese caso se divide por 100.
   const conPremio = out.filter(x=>x.premio>0);
   const enCentavos = conPremio.length>0 && conPremio.every(x=> x.premio % 100 === 0);
   if(enCentavos){ out.forEach(x=> x.premio = x.premio/100); }
-  return {rows:out, tieneMatricula: iMat>=0, premioEnCentavos: enCentavos, dvMap};
+  return {rows:out, tieneMatricula: iMat>=0, premioEnCentavos: enCentavos, dvMap, formato:'coriza', sinPremio:false};
 }
 function parseCartera(rows){
   const hi=findHeaderRow(rows,['CR']) >=0 ? findHeaderRow(rows,['CR']) : 0;
@@ -1143,6 +1175,8 @@ function carteraPreviaPara(periodo){
 
 /* ================= CALCULAR ================= */
 function recalcularTodo(){
+  // Si la base no trae premio (planilla de ventas genuinas), usar la prima promedio como premio de cada póliza
+  if(ST.base && ST.base.sinPremio){ ST.base.rows.forEach(r=> r.premio = ST.prima||0); }
   const {oficina,gd}=crMaps();
   const jm=jefeMap();
   const esComisionable = cr => GD_COM.includes(gd[cr]);  // solo las 7 GD comerciales; excluye CAT/WEB y áreas centrales
