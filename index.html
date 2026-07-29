@@ -480,6 +480,17 @@ tr.top3 td{background:#fffdf5}
       </div>
       <div id="persInfo" class="foot-note"></div>
     </div>
+    <div class="card">
+      <h2>Dotación / Dígito verificador</h2>
+      <div class="desc">Matrícula → dígito verificador de toda la dotación. Sirve para completar el DV en los Excel de RRHH (incluso de jefes que no venden).</div>
+      <div class="drop" id="dropDot" onclick="document.getElementById('fileDot').click()">
+        <div class="t">Cargar dotación (.xlsx o .csv)</div>
+        <div class="h">Columnas: Matricula · digito · Apellido · Nombre · Dependencia · Gerencia</div>
+        <div class="file" id="fileDotName"></div>
+        <input type="file" id="fileDot" accept=".xlsx,.xls,.csv">
+      </div>
+      <div id="dotInfo" class="foot-note"></div>
+    </div>
   </div>
   <div class="card">
     <h2>Cartera línea base (mes anterior al primer cierre)</h2>
@@ -749,6 +760,7 @@ async function sincronizarDesdeNube(){
     DB.crTable    = m.cr || DB.crTable;
     if(m.personal){ DB.personal = m.personal.personal||m.personal; DB.personalNombres = m.personal.personalNombres||DB.personalNombres; DB.personalOrigen = m.personal.personalOrigen||DB.personalOrigen; }
     DB.carteraBase= m.carteraBase || DB.carteraBase;
+    if(m.dotacionDV) DB.dotacionDV = m.dotacionDV;
     DB.cierres = (cierres||[]).map(c=> ({...c.datos, periodo:c.periodo, cargado_por:c.cargado_por, cargado_nom:c.cargado_nom, actualizado:c.actualizado}));
     // refrescar vistas dependientes si existen
     if(typeof renderHistorico==='function') renderHistorico();
@@ -1038,6 +1050,29 @@ function origenDe(mat){
   const o=(DB.personalOrigen||{})[String(mat)];
   if(!o) return null;
   return o;
+}
+// Dotación: matrícula -> dígito verificador (fuente confiable para RRHH, incluye jefes que no venden)
+function parseDotacion(rows){
+  const hi=findHeaderRow(rows,['MATRICULA','DIGITO']); const start=hi>=0?hi+1:1;
+  const H=hi>=0?rows[hi]:rows[0];
+  let iMat=colIndex(H,['MATRICULA','MATRÍCULA']); if(iMat<0) iMat=0;
+  let iDV=colIndex(H,['DIGITO','DÍGITO','DV']); if(iDV<0) iDV=1;
+  const m={};
+  for(let r=start;r<rows.length;r++){
+    const row=rows[r]; if(!row) continue;
+    const mat=row[iMat]; if(mat==null||mat==='') continue;
+    const dv=row[iDV];
+    if(dv!=null && dv!=='') m[String(mat).trim()]=String(dv).trim();
+  }
+  return m;
+}
+// DV de una matrícula: primero la dotación (confiable), si no la base de seguros
+function dvDeMatricula(mat){
+  const k=String(mat);
+  if(DB.dotacionDV && DB.dotacionDV[k]!=null) return DB.dotacionDV[k];
+  const baseDV=(ST.base&&ST.base.dvMap)||{};
+  if(baseDV[k]!=null) return baseDV[k];
+  return '';
 }
 
 /* ================= UI: navegación ================= */
@@ -1488,10 +1523,35 @@ function renderJefe(q){
       : ('Ningún jefe genera comisión este mes (sin cartera previa o sin crecimiento). '+(c.prevFuente?'Cartera previa: '+c.prevFuente:''));
     document.getElementById('jefeWrap').innerHTML='<div class="msg info"><span class="ic">!</span><span>'+motivo+'</span></div>'; return;
   }
+  const prima=ST.prima||0;
+  const incentivoPorSeguro = prima*0.05;
+  // Solo los CR que crecieron y pagan incentivo
+  const crPagan=(c.jefe.porCR||[]).filter(x=>x.comision>0);
+
+  // ---- Vista 1: detalle por dependencia (CR) ----
+  let h='<div class="foot-note"><b>Detalle por dependencia</b> — comisión por crecimiento de cartera. Base: prima promedio '+money(prima)+' · incentivo por seguro (5%) '+money(incentivoPorSeguro)+'.</div>';
+  h+='<div class="tbl-scroll" style="margin-top:6px"><table class="dt"><thead><tr>'+
+     '<th>Dependencia</th><th>Jefe</th><th class="r">Cartera mes anterior</th><th class="r">Cartera mes</th><th class="r">% creció</th>'+
+     '<th class="r">Seguros producidos</th><th class="r">Prima promedio</th><th class="r">Incentivo x seguro (5%)</th><th class="r">Comisión</th></tr></thead><tbody>';
+  let tGen=0,tCom=0;
+  crPagan.forEach(x=>{
+    const growthTxt = x.crecimiento!=null ? '<span style="color:var(--verde);font-weight:700">▲ '+(x.crecimiento*100).toFixed(1)+'%</span>' : '—';
+    h+='<tr><td>'+(x.oficina||('CR '+x.cr))+'</td><td>'+(x.jefe_nombre||'—')+'</td>'+
+       '<td class="r mono">'+num(x.cartera_previa)+'</td><td class="r mono">'+num(x.cartera_actual)+'</td>'+
+       '<td class="r">'+growthTxt+'</td><td class="r mono">'+num(x.genuinos)+'</td>'+
+       '<td class="r mono">'+money(prima)+'</td><td class="r mono">'+money(incentivoPorSeguro)+'</td>'+
+       '<td class="r mono" style="font-weight:700">'+money(x.comision)+'</td></tr>';
+    tGen+=x.genuinos; tCom+=x.comision;
+  });
+  h+='<tr class="total"><td colspan="5">Total ('+crPagan.length+' dependencias)</td><td class="r mono">'+num(tGen)+'</td><td></td><td></td><td class="r mono">'+money(tCom)+'</td></tr>';
+  h+='</tbody></table></div>';
+
+  // ---- Vista 2: agrupado por jefe ----
   const rows=c.jefe.jefes.filter(j=>!q||up(j.nombre).includes(q)||up(String(j.matricula)).includes(q));
-  let h='<div class="tbl-scroll"><table class="dt"><thead><tr><th>#</th><th>Matrícula</th><th>Jefe a cargo</th><th class="r">CR con crecimiento</th><th class="r">Comisión</th></tr></thead><tbody>';
+  h+='<div class="foot-note" style="margin-top:16px"><b>Resumen por jefe</b> — suma de las dependencias a cargo que crecieron.</div>';
+  h+='<div class="tbl-scroll" style="margin-top:6px"><table class="dt"><thead><tr><th>#</th><th>Matrícula</th><th>Jefe a cargo</th><th class="r">Dependencias con crecimiento</th><th class="r">Comisión total</th></tr></thead><tbody>';
   rows.forEach((j,i)=>{
-    h+='<tr><td>'+(i+1)+'</td><td class="mono">'+j.matricula+'</td><td>'+(j.nombre||'—')+'</td><td class="r mono">'+j.crs.length+'</td><td class="r mono">'+money(j.comision)+'</td></tr>';
+    h+='<tr><td>'+(i+1)+'</td><td class="mono">'+j.matricula+'</td><td>'+(j.nombre||'—')+'</td><td class="r mono">'+j.crs.length+'</td><td class="r mono" style="font-weight:700">'+money(j.comision)+'</td></tr>';
   });
   const tot=rows.reduce((s,j)=>s+j.comision,0);
   h+='<tr class="total"><td colspan="4">Total ('+rows.length+' jefes)</td><td class="r mono">'+money(tot)+'</td></tr></tbody></table></div>';
@@ -1919,6 +1979,17 @@ document.getElementById('filePers').onchange=e=>{
     }catch(err){ document.getElementById('persInfo').innerHTML='<span style="color:var(--rojo)">'+err.message+'</span>'; }
   });
 };
+document.getElementById('fileDot').onchange=e=>{
+  const f=e.target.files[0]; if(!f) return;
+  readSheet(f, rows=>{
+    try{ const m=parseDotacion(rows); DB.dotacionDV=m; saveDB(DB);
+      guardarMaestraNube('dotacionDV', m).then(()=>{ registrarActividad('dotacion','Actualizó la dotación / DV ('+Object.keys(m).length+')'); toast('Dotación (DV) compartida con el equipo.','ok'); }).catch(e=>toast('Dotación cargada, pero NO se pudo guardar en la nube: '+e.message,'err'));
+      document.getElementById('dropDot').classList.add('ok');
+      document.getElementById('fileDotName').textContent=f.name;
+      document.getElementById('dotInfo').innerHTML='<span style="color:var(--verde);font-weight:600">✓ '+num(Object.keys(m).length)+' matrículas con dígito verificador cargadas.</span>';
+    }catch(err){ document.getElementById('dotInfo').innerHTML='<span style="color:var(--rojo)">'+err.message+'</span>'; }
+  });
+};
 document.getElementById('fileBase0').onchange=e=>{
   const f=e.target.files[0]; if(!f) return;
   readSheet(f, rows=>{
@@ -1951,8 +2022,7 @@ document.getElementById('fileRestore').onchange=e=>{
 /* ================= EXPORTAR RRHH ================= */
 document.getElementById('btnExpRRHH').onclick=()=>{
   if(!ST.calc) return;
-  const dvMap=(ST.base&&ST.base.dvMap)||{};
-  const dvDe = mat => dvMap[String(mat)]!=null ? Number(dvMap[String(mat)]) : '';
+  const dvDe = mat => { const d=dvDeMatricula(mat); return d===''?'':Number(d); };
   const mesLiq = (()=>{ if(!ST.periodo) return ''; const [y,m]=ST.periodo.split('-'); return m+'/'+y; })();
 
   // Construye una hoja con el formato exacto de RRHH (encabezado + datos + total + firmas)
