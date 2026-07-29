@@ -237,6 +237,7 @@ tr.top3 td{background:#fffdf5}
   </div>
   <div style="display:flex;align-items:center;gap:10px">
     <span id="selfTest" class="self-test">motor…</span>
+    <select id="selPeriodo" class="txt" style="width:auto;min-width:140px;display:none" title="Elegí qué cierre ver"></select>
     <span class="periodo-badge" id="periodoBadge">Sin período cargado</span>
     <span id="userChip" class="user-chip" style="display:none"></span>
   </div>
@@ -746,6 +747,7 @@ async function entrarApp(){
   // Mostrar automáticamente el último cierre guardado (si hay y tiene detalle)
   const ultimos=(DB.cierres||[]).filter(c=>c.detalle).sort((a,b)=>a.periodo<b.periodo?1:-1);
   if(ultimos.length){ abrirCierre(ultimos[0].periodo); toast('Se abrió el último cierre guardado ('+ultimos[0].periodo+'). Tocá "Nuevo proceso" para cargar otro mes.','ok'); }
+  else { refreshSelPeriodo(); }
 }
 
 /* ---- Sincronización de datos (nube <-> app) ---- */
@@ -1322,6 +1324,7 @@ document.getElementById('btnGuardar').onclick=()=>{
   DB.cierres.push(cierre);
   saveDB(DB);
   renderHistorico();
+  refreshSelPeriodo(ST.periodo);
   guardarCierreNube(ST.periodo, cierre)
     .then(()=>{ registrarActividad('cierre','Guardó el cierre '+ST.periodo+(cierre.desde?(' ('+cierre.desde+' a '+cierre.hasta+')'):'')); toast('Cierre '+ST.periodo+' guardado en la base del equipo por '+SESION.nombre+'.','ok'); })
     .catch(e=> toast('Guardado local OK, pero no se pudo subir a la base del equipo: '+e.message,'err'));
@@ -1346,6 +1349,7 @@ document.getElementById('btnNuevoProceso').onclick=()=>{
   document.getElementById('calcState').textContent='';
   refreshBadge();
   ocultarModoCierre();
+  const sel=document.getElementById('selPeriodo'); if(sel) sel.value='';
   document.querySelector('nav.tabs button[data-tab="cargar"]').click();
   toast('Pantalla blanqueada. Cargá el nuevo mes.','ok');
 };
@@ -1371,6 +1375,7 @@ function abrirCierre(periodo){
     try{ renderInforme(); renderTop(); if(typeof renderEvolucion==='function') renderEvolucion(); }catch(e){}
     refreshBadge();
     mostrarModoCierre(c);
+    refreshSelPeriodo(periodo);
     toast('Cierre '+periodo+' abierto completo ('+(c.guardado_por||'—')+'). Comisiones, Informe, Top y Evolución reconstruidos.','ok');
     document.querySelector('nav.tabs button[data-tab="comisiones"]').click();
     return;
@@ -1395,6 +1400,18 @@ function mostrarModoCierre(c){
   el.innerHTML='<span class="lock">🔒 Cierre guardado</span> Estás viendo <b>'+c.periodo+'</b> ('+corte+')'+(c.guardado_por?(' guardado por '+c.guardado_por):'')+'. No se modifica hasta que cargues un mes nuevo. <span class="x" onclick="document.querySelector(\'nav.tabs button[data-tab=cargar]\').click()">Cargar un mes nuevo</span>';
 }
 function ocultarModoCierre(){ const el=document.getElementById('modoCierre'); if(el) el.style.display='none'; }
+
+// Llena el selector de período con los cierres guardados y marca el actual
+function refreshSelPeriodo(activo){
+  const sel=document.getElementById('selPeriodo'); if(!sel) return;
+  const cierres=(DB.cierres||[]).slice().sort((a,b)=>a.periodo<b.periodo?1:-1);
+  if(!cierres.length){ sel.style.display='none'; return; }
+  sel.style.display='';
+  sel.innerHTML='<option value="">— Ver un cierre guardado —</option>'+
+    cierres.map(c=>'<option value="'+c.periodo+'">'+c.periodo+(c.desde?(' ('+c.dias+'d)'):'')+'</option>').join('');
+  if(activo) sel.value=activo;
+  sel.onchange=()=>{ if(sel.value) abrirCierre(sel.value); };
+}
 
 /* ================= RENDER COMISIONES ================= */
 function renderComisiones(){
