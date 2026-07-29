@@ -416,7 +416,7 @@ tr.top3 td{background:#fffdf5}
       <div class="btn-row" style="gap:14px;flex-wrap:wrap;align-items:flex-end">
         <div><label class="fld">Gerencia</label><select id="filtroGDtop" class="txt" style="width:auto;min-width:200px"></select></div>
         <div><label class="fld">Métrica</label><div class="seg" id="segMetrica"><button data-v="pol" class="on">Pólizas</button><button data-v="prima">Prima</button></div></div>
-        <div><label class="fld">Tipo de póliza</label><div class="seg" id="segTipo"><button data-v="gen" class="on">Genuinas</button><button data-v="no">No genuinas</button><button data-v="all">Todas</button></div></div>
+        <div style="display:none"><label class="fld">Tipo de póliza</label><div class="seg" id="segTipo"><button data-v="gen" class="on">Genuinas</button></div></div>
         <div><label class="fld">Cantidad</label><div class="seg" id="segTop"><button data-v="10" class="on">Top 10</button><button data-v="15">Top 15</button></div></div>
         <button class="btn ghost sm" id="btnPrintTop" style="margin-left:auto">🖨 Imprimir tops</button>
       </div>
@@ -1270,7 +1270,21 @@ function recalcularTodo(){
   if(!ST.base.tieneMatricula) toast('La base no trae matrícula: la comisión por vendedor no se calcula este mes.','warn');
   toast('Cálculo listo. Revisá la solapa Comisiones.','ok');
 }
-document.getElementById('btnCalcular').onclick=()=>{ if(ST.base){ ocultarModoCierre(); recalcularTodo(); } };
+document.getElementById('btnCalcular').onclick=()=>{ if(ST.base){ ocultarModoCierre(); recalcularTodo(); marcarSinGuardar(true); } };
+// Aviso de cambios sin guardar
+function marcarSinGuardar(hay){
+  const st=document.getElementById('calcState');
+  const btn=document.getElementById('btnGuardar');
+  if(hay){
+    if(st) st.innerHTML='<span style="color:#b45309;font-weight:700">⚠ Cálculo sin guardar — tocá "Guardar cierre" para no perderlo.</span>';
+    if(btn){ btn.classList.add('amar'); btn.classList.remove('ghost'); }
+    ST._sinGuardar=true;
+  } else {
+    if(st) st.innerHTML='<span style="color:var(--verde);font-weight:600">✓ Cierre guardado.</span>';
+    if(btn){ btn.classList.remove('amar'); btn.classList.add('ghost'); }
+    ST._sinGuardar=false;
+  }
+}
 
 /* ================= EVOLUCIÓN: snapshot por GD / dependencia / jefe ================= */
 function construirEvolucion(rows, gd, oficina){
@@ -1327,6 +1341,7 @@ document.getElementById('btnGuardar').onclick=()=>{
   saveDB(DB);
   renderHistorico();
   refreshSelPeriodo(ST.periodo);
+  marcarSinGuardar(false);
   guardarCierreNube(ST.periodo, cierre)
     .then(()=>{ registrarActividad('cierre','Guardó el cierre '+ST.periodo+(cierre.desde?(' ('+cierre.desde+' a '+cierre.hasta+')'):'')); toast('Cierre '+ST.periodo+' guardado en la base del equipo por '+SESION.nombre+'.','ok'); })
     .catch(e=> toast('Guardado local OK, pero no se pudo subir a la base del equipo: '+e.message,'err'));
@@ -1334,8 +1349,11 @@ document.getElementById('btnGuardar').onclick=()=>{
 
 /* ================= NUEVO PROCESO (blanquear) ================= */
 document.getElementById('btnNuevoProceso').onclick=()=>{
+  if(ST._sinGuardar && ST.calc){
+    if(!confirm('⚠ Tenés un cálculo SIN GUARDAR.\n\nSi seguís sin guardar, se pierde (incluida la cartera del mes y la comisión de jefes).\n\n¿Blanquear igual sin guardar?')) return;
+  }
   if(!confirm('¿Blanquear la pantalla para empezar un proceso nuevo?\n\nEsto NO borra el histórico ni los cierres guardados. Solo limpia lo que estás viendo ahora para cargar otro mes.')) return;
-  ST.periodo=''; ST.prima=0; ST.desde=''; ST.hasta=''; ST.dias=0; ST.base=null; ST.cartera=null; ST.calc=null;
+  ST.periodo=''; ST.prima=0; ST.desde=''; ST.hasta=''; ST.dias=0; ST.base=null; ST.cartera=null; ST.calc=null; ST._sinGuardar=false;
   ['inpPeriodo','inpPrima','inpDesde','inpHasta'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
   ['dropBase','dropCartera'].forEach(id=>{ const el=document.getElementById(id); if(el) el.classList.remove('ok'); });
   const bn=document.getElementById('fileBaseName'); if(bn) bn.textContent='';
@@ -1378,6 +1396,7 @@ function abrirCierre(periodo, quedarse){
     try{ renderInforme(); renderTop(); if(typeof renderEvolucion==='function') renderEvolucion(); }catch(e){}
     refreshBadge();
     mostrarModoCierre(c);
+    ST._sinGuardar=false; const cs=document.getElementById('calcState'); if(cs) cs.innerHTML='';
     refreshSelPeriodo(periodo);
     toast('Cierre '+periodo+' abierto completo ('+(c.guardado_por||'—')+'). Comisiones, Informe, Top y Evolución reconstruidos.','ok');
     irASolapaCierre();
@@ -1603,20 +1622,18 @@ function renderInforme(){
   document.getElementById('informeContent').style.display='block';
   const c=ST.calc, gd=c.gd, oficina=c.oficina, rows=ST.base.rows;
 
-  // ---- País (todos los canales) ----
-  let pGen=0,pNo=0,pGenP=0,pNoP=0;
-  rows.forEach(r=>{ if(r.genuino){pGen++;pGenP+=r.premio;} else {pNo++;pNoP+=r.premio;} });
+  // ---- País (todos los canales) — SOLO genuinas ----
+  let pGen=0,pGenP=0;
+  rows.forEach(r=>{ if(r.genuino){pGen++;pGenP+=r.premio;} });
   let paisHTML=
     '<div class="pais-grid">'+
-    '<div class="pais-box tot"><div class="lbl">Seguros realizados</div><div class="big">'+num(pGen+pNo)+'</div><div class="sub">total del período</div></div>'+
-    '<div class="pais-box gen"><div class="lbl">Genuinos</div><div class="big">'+num(pGen)+'</div><div class="sub">'+((pGen+pNo)?(pGen/(pGen+pNo)*100).toFixed(1):'0')+'% del total</div></div>'+
-    '<div class="pais-box no"><div class="lbl">No genuinos</div><div class="big">'+num(pNo)+'</div><div class="sub">'+((pGen+pNo)?(pNo/(pGen+pNo)*100).toFixed(1):'0')+'% del total</div></div>'+
-    '<div class="pais-box tot"><div class="lbl">Prima cobrada</div><div class="big" style="font-size:20px">'+money(pGenP+pNoP)+'</div><div class="sub">genuina '+money(pGenP)+'</div></div>'+
+    '<div class="pais-box gen"><div class="lbl">Seguros genuinos</div><div class="big">'+num(pGen)+'</div><div class="sub">total del período (solo genuinos)</div></div>'+
+    '<div class="pais-box tot"><div class="lbl">Prima cobrada (genuina)</div><div class="big" style="font-size:20px">'+money(pGenP)+'</div><div class="sub">'+num(pGen)+' seguros genuinos</div></div>'+
     '</div>';
-  // ---- Cuadrito: desglose del total país por grupo (suma = total) ----
+  // ---- Cuadrito: desglose del total país por grupo (SOLO genuinos) ----
   const CANAL_CR={'1864':'CAT — Centro de Atención', '2925':'ACANET / WEB', '1902':'Sistemas'};
-  const grupos={}; // nombre -> {seg, gen}
-  const add=(k,g)=>{ if(!grupos[k]) grupos[k]={seg:0,gen:0}; grupos[k].seg++; if(g) grupos[k].gen++; };
+  const grupos={}; // nombre -> {gen}
+  const add=(k,g)=>{ if(!grupos[k]) grupos[k]={gen:0}; if(g) grupos[k].gen++; };
   rows.forEach(r=>{
     const crStr=String(r.cr);
     if(CANAL_CR[crStr]) add(CANAL_CR[crStr], r.genuino);
@@ -1624,19 +1641,19 @@ function renderInforme(){
     else add('Otras áreas', r.genuino);
   });
   const orden=['Gestión Operativa (Gerencias Divisionales)','CAT — Centro de Atención','ACANET / WEB','Sistemas','Otras áreas'];
-  const listaGrupos=orden.filter(k=>grupos[k]).map(k=>({nombre:k, ...grupos[k]}));
-  const sumaSeg=listaGrupos.reduce((s,g)=>s+g.seg,0);
+  const listaGrupos=orden.filter(k=>grupos[k]&&grupos[k].gen>0).map(k=>({nombre:k, gen:grupos[k].gen}));
+  const sumaGen=listaGrupos.reduce((s,g)=>s+g.gen,0);
   if(listaGrupos.length){
-    paisHTML+='<div class="foot-note" style="margin-top:14px"><b>Discriminación del total producido</b> ('+num(sumaSeg)+' seguros) — cuánto aportó cada canal:</div>';
+    paisHTML+='<div class="foot-note" style="margin-top:14px"><b>Discriminación de genuinos producidos</b> ('+num(sumaGen)+' seguros genuinos) — cuánto aportó cada canal:</div>';
     paisHTML+='<div class="pais-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin-top:6px">';
     listaGrupos.forEach(g=>{
       const esComercial = g.nombre.startsWith('Gestión Operativa');
       const borde = esComercial ? '#1e7d45' : (g.nombre==='Otras áreas' ? '#94a3b8' : '#7c5cbf');
-      const pct = sumaSeg? (g.seg/sumaSeg*100).toFixed(1) : '0';
-      paisHTML+='<div class="pais-box" style="border-left:4px solid '+borde+'"><div class="lbl">'+g.nombre+'</div><div class="big" style="font-size:22px">'+num(g.seg)+'</div><div class="sub">'+pct+'% del total · '+num(g.gen)+' genuinos</div></div>';
+      const pct = sumaGen? (g.gen/sumaGen*100).toFixed(1) : '0';
+      paisHTML+='<div class="pais-box" style="border-left:4px solid '+borde+'"><div class="lbl">'+g.nombre+'</div><div class="big" style="font-size:22px">'+num(g.gen)+'</div><div class="sub">'+pct+'% de genuinos</div></div>';
     });
     paisHTML+='</div>';
-    paisHTML+='<div class="foot-note" style="margin-top:4px">Suma de todos los canales = '+num(sumaSeg)+' (coincide con el total país).</div>';
+    paisHTML+='<div class="foot-note" style="margin-top:4px">Suma de todos los canales = '+num(sumaGen)+' genuinos (coincide con el total país).</div>';
   }
   document.getElementById('boxPais').innerHTML=paisHTML;
 
@@ -1654,33 +1671,24 @@ function renderInforme(){
   });
   ST.informe={H};
 
-  // ---- Cuadro GD (ranking, ordenado por pólizas totales) ----
-  const gds=Object.values(H).sort((a,b)=> (b.gen+b.no)-(a.gen+a.no) || b.totP-a.totP);
-  const maxTot=gds.length?(gds[0].gen+gds[0].no):1;
+  // ---- Cuadro GD (ranking, ordenado por genuinos) ----
+  const gds=Object.values(H).sort((a,b)=> b.gen-a.gen || b.genP-a.genP);
+  const maxTot=gds.length?gds[0].gen:1;
   let g='<div class="tbl-scroll"><table class="dt"><thead><tr><th>#</th><th>Gerencia Divisional</th>'+
     '<th class="r">Seguros genuinos</th><th class="r">Prima genuinos</th>'+
-    '<th class="r">Seguros no genuinos</th><th class="r">Prima no genuinos</th>'+
-    '<th class="r">Seguros totales</th><th class="r">Prima total</th>'+
     '<th style="width:100px">Particip.</th></tr></thead><tbody>';
-  let T={gen:0,genP:0,no:0,noP:0,tot:0,totP:0};
+  let T={gen:0,genP:0};
   gds.forEach((G,i)=>{
     const neuq=G.gd==='ADMINISTRACION DIV. NEUQUEN'?'neuquen':'';
-    const totalG=G.gen+G.no;
-    const w=(totalG/maxTot*100).toFixed(0);
+    const w=(G.gen/maxTot*100).toFixed(0);
     g+='<tr class="'+neuq+'"><td>'+(i+1)+'</td><td>'+prettyGD(G.gd)+'</td>'+
        '<td class="r mono" style="color:var(--verde);font-weight:700">'+num(G.gen)+'</td>'+
        '<td class="r mono">'+money(G.genP)+'</td>'+
-       '<td class="r mono" style="color:var(--gris)">'+num(G.no)+'</td>'+
-       '<td class="r mono" style="color:var(--gris)">'+money(G.noP)+'</td>'+
-       '<td class="r mono" style="font-weight:700">'+num(totalG)+'</td>'+
-       '<td class="r mono" style="font-weight:700">'+money(G.totP)+'</td>'+
        '<td><div style="background:#eef2f6;border-radius:6px;height:9px;overflow:hidden"><div style="width:'+w+'%;height:100%;background:var(--amar)"></div></div></td></tr>';
-    T.gen+=G.gen;T.genP+=G.genP;T.no+=G.no;T.noP+=G.noP;T.tot+=totalG;T.totP+=G.totP;
+    T.gen+=G.gen;T.genP+=G.genP;
   });
   g+='<tr class="total"><td colspan="2">Total GGDD</td>'+
-     '<td class="r mono">'+num(T.gen)+'</td><td class="r mono">'+money(T.genP)+'</td>'+
-     '<td class="r mono">'+num(T.no)+'</td><td class="r mono">'+money(T.noP)+'</td>'+
-     '<td class="r mono">'+num(T.tot)+'</td><td class="r mono">'+money(T.totP)+'</td><td></td></tr>'+
+     '<td class="r mono">'+num(T.gen)+'</td><td class="r mono">'+money(T.genP)+'</td><td></td></tr>'+
      '</tbody></table></div>';
   document.getElementById('boxGD').innerHTML=g;
   ST.informe.gds=gds;
@@ -2131,14 +2139,12 @@ document.getElementById('btnExpInforme').onclick=()=>{
   const c=ST.calc, gd=c.gd, oficina=c.oficina, rows=ST.base.rows;
   const wb=XLSX.utils.book_new();
 
-  // ---- Hoja País ----
-  let pGen=0,pNo=0,pGenP=0,pNoP=0;
-  rows.forEach(r=>{ if(r.genuino){pGen++;pGenP+=r.premio;} else {pNo++;pNoP+=r.premio;} });
-  const pais=[['PRODUCCIÓN PAÍS — '+ST.periodo],[],
+  // ---- Hoja País (solo genuinos) ----
+  let pGen=0,pGenP=0;
+  rows.forEach(r=>{ if(r.genuino){pGen++;pGenP+=r.premio;} });
+  const pais=[['PRODUCCIÓN PAÍS (solo genuinos) — '+ST.periodo],[],
     ['','Certificados','Premio'],
-    ['Genuinos',pGen,Math.round(pGenP)],
-    ['No genuinos',pNo,Math.round(pNoP)],
-    ['Total país',pGen+pNo,Math.round(pGenP+pNoP)]];
+    ['Genuinos',pGen,Math.round(pGenP)]];
   const wsP=XLSX.utils.aoa_to_sheet(pais); wsP['!cols']=[{wch:16},{wch:14},{wch:18}];
   XLSX.utils.book_append_sheet(wb,wsP,'País');
 
@@ -2230,7 +2236,6 @@ function buildInformeHTML(data){
     '</article>';
   });
 
-  const genPct = pais.tot? (pais.gen/pais.tot*100):0;
 
   return `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -2313,14 +2318,10 @@ footer{padding:22px 48px 34px;color:var(--gris);font-size:11.5px;border-top:1px 
   <div class="meta">${data.filtroNombre?('<b style="color:#fff">'+esc(data.filtroNombre)+'</b> · '):''}Prima promedio ${money(prima)} · producción genuina y total por Gerencia Divisional</div>
 </header>
 <section class="pais">
-  <div class="eyebrow">Producción país · incluye WEB y CAT</div>
+  <div class="eyebrow">Producción país (solo genuinos) · incluye WEB y CAT</div>
   <div class="stats">
-    <div class="stat gen"><div class="k">Genuinos</div><div class="v">${nf(pais.gen)}</div><div class="d">${money(pais.genP)} en premios</div></div>
-    <div class="stat no"><div class="k">No genuinos</div><div class="v">${nf(pais.no)}</div><div class="d">${money(pais.noP)} en premios</div></div>
-    <div class="stat tot"><div class="k">Total país</div><div class="v">${nf(pais.tot)}</div><div class="d">${money(pais.genP+pais.noP)} en premios</div></div>
+    <div class="stat gen"><div class="k">Seguros genuinos</div><div class="v">${nf(pais.gen)}</div><div class="d">${money(pais.genP)} en premios</div></div>
   </div>
-  <div class="genbar"><div class="g" style="width:${genPct.toFixed(1)}%"></div><div class="n" style="width:${(100-genPct).toFixed(1)}%"></div></div>
-  <div class="genbar-lbl"><span><b>${genPct.toFixed(1)}%</b> genuinos</span><span>${(100-genPct).toFixed(1)}% no genuinos</span></div>
 </section>
 <section class="gerencias">
   <div class="eyebrow">Gerencias Divisionales · sin CAT ni WEB</div>
@@ -2389,6 +2390,15 @@ function refreshMaestrasInfo(){
   }
   else document.getElementById('persInfo').innerHTML='<span style="color:var(--gris)">Sin tabla de Personal cargada — necesaria para la comisión de jefes.</span>';
   if(DB.carteraBase) document.getElementById('base0Info').innerHTML='<span style="color:var(--verde);font-weight:600">✓ '+Object.keys(DB.carteraBase).length+' CR de línea base.</span>';
+  const dotEl=document.getElementById('dotInfo');
+  if(dotEl){
+    if(DB.dotacionDV && Object.keys(DB.dotacionDV).length){
+      dotEl.innerHTML='<span style="color:var(--verde);font-weight:600">✓ '+num(Object.keys(DB.dotacionDV).length)+' matrículas con dígito verificador cargadas.</span>';
+      const dd=document.getElementById('dropDot'); if(dd) dd.classList.add('ok');
+    } else {
+      dotEl.innerHTML='<span style="color:var(--gris)">Sin dotación cargada — se usa para completar el dígito verificador en los Excel de RRHH.</span>';
+    }
+  }
 }
 (function init(){
   const ok=runSelfTest();
