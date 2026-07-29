@@ -324,6 +324,10 @@ tr.top3 td{background:#fffdf5}
   </div>
   <div id="comisionesContent" style="display:none">
     <div class="kpi-row" id="comKpis"></div>
+    <div class="flexbar" style="margin:12px 0 4px">
+      <div class="desc" style="margin:0">Buscá por nombre o dependencia — filtra vendedores y jefes a la vez.</div>
+      <input class="searchbox" id="searchComision" placeholder="Buscar nombre o dependencia (ej: Torres, Neuquén)…" style="min-width:320px">
+    </div>
     <div class="sub-tabs">
       <button class="on" data-sub="vend">Por vendedor</button>
       <button data-sub="jefe">Por jefe (crecimiento de cartera)</button>
@@ -333,7 +337,6 @@ tr.top3 td{background:#fffdf5}
         <div class="flexbar">
           <div><h2>Comisión por ventas</h2>
             <div class="desc" style="margin:0">Tramos: <span class="pill g3">1–10 = 3%</span> <span class="pill g8">11–20 = 8%</span> <span class="pill g12">+20 = 12%</span> · sobre cantidad de pólizas genuinas × prima</div></div>
-          <input class="searchbox" id="searchVend" placeholder="Buscar matrícula o nombre…">
         </div>
         <div id="vendWrap"></div>
       </div>
@@ -343,7 +346,6 @@ tr.top3 td{background:#fffdf5}
         <div class="flexbar">
           <div><h2>Comisión por crecimiento de cartera</h2>
             <div class="desc" style="margin:0">Si la cartera del CR creció vs. mes anterior: genuinos × prima × 5% al jefe a cargo</div></div>
-          <input class="searchbox" id="searchJefe" placeholder="Buscar jefe o CR…">
         </div>
         <div id="jefeWrap"></div>
       </div>
@@ -1355,9 +1357,10 @@ document.getElementById('btnNuevoProceso').onclick=()=>{
 };
 
 /* ================= ABRIR UN CIERRE GUARDADO (ver detalle) ================= */
-function abrirCierre(periodo){
+function abrirCierre(periodo, quedarse){
   const c=(DB.cierres||[]).find(x=>x.periodo===periodo);
   if(!c){ toast('No encuentro ese cierre.','warn'); return; }
+  ST._quedarse = !!quedarse;
   ST.periodo=c.periodo; ST.prima=c.prima; ST.desde=c.desde||''; ST.hasta=c.hasta||''; ST.dias=c.dias||0;
   // sincronizar los campos visibles
   const set=(id,v)=>{ const el=document.getElementById(id); if(el) el.value=v||''; };
@@ -1377,7 +1380,7 @@ function abrirCierre(periodo){
     mostrarModoCierre(c);
     refreshSelPeriodo(periodo);
     toast('Cierre '+periodo+' abierto completo ('+(c.guardado_por||'—')+'). Comisiones, Informe, Top y Evolución reconstruidos.','ok');
-    document.querySelector('nav.tabs button[data-tab="comisiones"]').click();
+    irASolapaCierre();
     return;
   }
   // Cierres viejos sin base cruda: solo detalle de comisiones
@@ -1388,7 +1391,7 @@ function abrirCierre(periodo){
       tieneMat:c.detalle.tieneMat!==false, gd, oficina };
     renderComisiones(); refreshBadge();
     toast('Cierre '+periodo+' (solo comisiones; es anterior a la mejora de reconstrucción completa).','warn');
-    document.querySelector('nav.tabs button[data-tab="comisiones"]').click();
+    irASolapaCierre();
     return;
   }
   toast('Este cierre no tiene datos para reabrir.','warn');
@@ -1400,6 +1403,16 @@ function mostrarModoCierre(c){
   el.innerHTML='<span class="lock">🔒 Cierre guardado</span> Estás viendo <b>'+c.periodo+'</b> ('+corte+')'+(c.guardado_por?(' guardado por '+c.guardado_por):'')+'. No se modifica hasta que cargues un mes nuevo. <span class="x" onclick="document.querySelector(\'nav.tabs button[data-tab=cargar]\').click()">Cargar un mes nuevo</span>';
 }
 function ocultarModoCierre(){ const el=document.getElementById('modoCierre'); if(el) el.style.display='none'; }
+// Al abrir un cierre: si venís de elegir en el selector, quedate en la solapa actual; si no, andá a Comisiones
+function irASolapaCierre(){
+  if(ST._quedarse){
+    const activa=document.querySelector('nav.tabs button.on');
+    if(!activa || activa.dataset.tab==='cargar'){ document.querySelector('nav.tabs button[data-tab="comisiones"]').click(); }
+    // si ya estás en informe/top/evolución/comisiones, no te muevo
+  } else {
+    document.querySelector('nav.tabs button[data-tab="comisiones"]').click();
+  }
+}
 
 // Llena el selector de período con los cierres guardados y marca el actual
 function refreshSelPeriodo(activo){
@@ -1410,7 +1423,7 @@ function refreshSelPeriodo(activo){
   sel.innerHTML='<option value="">— Ver un cierre guardado —</option>'+
     cierres.map(c=>'<option value="'+c.periodo+'">'+c.periodo+(c.desde?(' ('+c.dias+'d)'):'')+'</option>').join('');
   if(activo) sel.value=activo;
-  sel.onchange=()=>{ if(sel.value) abrirCierre(sel.value); };
+  sel.onchange=()=>{ if(sel.value) abrirCierre(sel.value, true); };
 }
 
 /* ================= RENDER COMISIONES ================= */
@@ -1435,7 +1448,8 @@ function renderVend(q){
   if(!c.tieneMat){ document.getElementById('vendWrap').innerHTML='<div class="msg warn"><span class="ic">!</span><span>La base del mes no incluye la matrícula del vendedor. Cuando Coriza envíe el archivo con matrícula, esta tabla se completa automáticamente.</span></div>'; return; }
   q=up(q);
   const nom = v => nombreDe(v.matricula)||v.nombre||'';
-  const rows=c.vend.filter(v=>!q||up(v.matricula).includes(q)||up(nom(v)).includes(q));
+  const depDe = v => v.cr!=null ? (c.oficina[v.cr]||('CR '+v.cr)) : '';
+  const rows=c.vend.filter(v=>!q||up(v.matricula).includes(q)||up(nom(v)).includes(q)||up(depDe(v)).includes(q));
   const sinNombre=[];
   let h='<div class="tbl-scroll"><table class="dt"><thead><tr><th>#</th><th>Matrícula</th><th>Vendedor</th><th>Dependencia / Gerencia</th><th class="r">Pólizas totales</th><th class="r">No genuinas</th><th class="r">Genuinas</th><th class="r">Tramo</th><th class="r">Comisión</th></tr></thead><tbody>';
   rows.forEach((v,i)=>{
@@ -1542,8 +1556,10 @@ function renderJefe(q){
   }
   const prima=ST.prima||0;
   const incentivoPorSeguro = prima*0.05;
-  // Solo los CR que crecieron y pagan incentivo
-  const crPagan=(c.jefe.porCR||[]).filter(x=>x.comision>0);
+  q=up(q);
+  // Solo los CR que crecieron y pagan incentivo, con filtro por dependencia o jefe
+  const crPagan=(c.jefe.porCR||[]).filter(x=>x.comision>0)
+    .filter(x=>!q||up(x.oficina||('CR '+x.cr)).includes(q)||up(x.jefe_nombre||'').includes(q));
 
   // ---- Vista 1: detalle por dependencia (CR) ----
   let h='<div class="foot-note"><b>Detalle por dependencia</b> — comisión por crecimiento de cartera. Base: prima promedio '+money(prima)+' · incentivo por seguro (5%) '+money(incentivoPorSeguro)+'.</div>';
@@ -1564,7 +1580,12 @@ function renderJefe(q){
   h+='</tbody></table></div>';
 
   // ---- Vista 2: agrupado por jefe ----
-  const rows=c.jefe.jefes.filter(j=>!q||up(j.nombre).includes(q)||up(String(j.matricula)).includes(q));
+  const rows=c.jefe.jefes.filter(j=>{
+    if(!q) return true;
+    if(up(j.nombre).includes(q)||up(String(j.matricula)).includes(q)) return true;
+    // también matchea si alguna de sus dependencias contiene el texto
+    return (j.crs||[]).some(cr=>up(c.oficina[cr]||('CR '+cr)).includes(q));
+  });
   h+='<div class="foot-note" style="margin-top:16px"><b>Resumen por jefe</b> — suma de las dependencias a cargo que crecieron.</div>';
   h+='<div class="tbl-scroll" style="margin-top:6px"><table class="dt"><thead><tr><th>#</th><th>Matrícula</th><th>Jefe a cargo</th><th class="r">Dependencias con crecimiento</th><th class="r">Comisión total</th></tr></thead><tbody>';
   rows.forEach((j,i)=>{
@@ -1574,8 +1595,7 @@ function renderJefe(q){
   h+='<tr class="total"><td colspan="4">Total ('+rows.length+' jefes)</td><td class="r mono">'+money(tot)+'</td></tr></tbody></table></div>';
   document.getElementById('jefeWrap').innerHTML=h;
 }
-document.getElementById('searchVend').oninput=e=>renderVend(e.target.value);
-document.getElementById('searchJefe').oninput=e=>renderJefe(e.target.value);
+document.getElementById('searchComision').oninput=e=>{ renderVend(e.target.value); renderJefe(e.target.value); };
 
 /* ================= RENDER INFORME (dashboard compacto) ================= */
 function renderInforme(){
