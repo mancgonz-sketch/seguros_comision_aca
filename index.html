@@ -1470,7 +1470,7 @@ function renderVend(q){
   const depDe = v => v.cr!=null ? (c.oficina[v.cr]||('CR '+v.cr)) : '';
   const rows=c.vend.filter(v=>!q||up(v.matricula).includes(q)||up(nom(v)).includes(q)||up(depDe(v)).includes(q));
   const sinNombre=[];
-  let h='<div class="tbl-scroll"><table class="dt"><thead><tr><th>#</th><th>Matrícula</th><th>Vendedor</th><th>Dependencia / Gerencia</th><th class="r">Pólizas totales</th><th class="r">No genuinas</th><th class="r">Genuinas</th><th class="r">Tramo</th><th class="r">Comisión</th></tr></thead><tbody>';
+  let h='<div class="tbl-scroll"><table class="dt"><thead><tr><th>#</th><th>Matrícula</th><th>Vendedor</th><th>Dependencia / Gerencia</th><th class="r">Genuinas</th><th class="r">Tramo</th><th class="r">Comisión</th></tr></thead><tbody>';
   rows.forEach((v,i)=>{
     const pc=v.tramo===0.03?'g3':v.tramo===0.08?'g8':'g12';
     const nombre=nom(v);
@@ -1481,14 +1481,12 @@ function renderVend(q){
     const depCell = '<div>'+ofi+'</div>'+(ger?'<div style="font-size:10.5px;color:var(--gris)">'+ger+'</div>':'');
     h+='<tr><td>'+(i+1)+'</td><td class="mono">'+v.matricula+'</td><td>'+nombreCell+'</td>'+
        '<td>'+depCell+'</td>'+
-       '<td class="r mono">'+num(v.total)+'</td>'+
-       '<td class="r mono" style="color:var(--gris)">'+num(v.noGen)+'</td>'+
        '<td class="r mono" style="color:var(--verde);font-weight:700">'+num(v.cantidad)+'</td>'+
        '<td class="r"><span class="pill '+pc+'">'+pct(v.tramo)+'</span></td>'+
        '<td class="r mono">'+money(v.comision)+'</td></tr>';
   });
-  const totT=rows.reduce((s,v)=>s+v.total,0), totNo=rows.reduce((s,v)=>s+v.noGen,0), totG=rows.reduce((s,v)=>s+v.cantidad,0), tot=rows.reduce((s,v)=>s+v.comision,0);
-  h+='<tr class="total"><td colspan="4">Total ('+rows.length+' vendedores)</td><td class="r mono">'+num(totT)+'</td><td class="r mono">'+num(totNo)+'</td><td class="r mono">'+num(totG)+'</td><td></td><td class="r mono">'+money(tot)+'</td></tr>';
+  const totG=rows.reduce((s,v)=>s+v.cantidad,0), tot=rows.reduce((s,v)=>s+v.comision,0);
+  h+='<tr class="total"><td colspan="4">Total ('+rows.length+' vendedores)</td><td class="r mono">'+num(totG)+'</td><td></td><td class="r mono">'+money(tot)+'</td></tr>';
   h+='</tbody></table></div>';
   if(sinNombre.length){
     h+='<div class="msg warn" style="margin-top:10px"><span class="ic">!</span><span><b>'+sinNombre.length+' vendedor(es) sin nombre en la tabla de Personal.</b> La comisión se calcula igual y RRHH liquida por matrícula, pero para que aparezca el nombre agregá estas matrículas al archivo de Personal: '+sinNombre.join(', ')+'</span></div>';
@@ -2161,24 +2159,24 @@ document.getElementById('btnExpInforme').onclick=()=>{
   });
 
   // Hoja resumen por GD
-  const rg=[['SOLO GERENCIAS DIVISIONALES — '+ST.periodo],[],['Gerencia Divisional','Genuinos','No genuinos','Premio genuino']];
-  Object.entries(H).sort((a,b)=>b[1].gen-a[1].gen).forEach(([g,G])=> rg.push([g,G.gen,G.no,Math.round(G.genP)]));
-  const wsRG=XLSX.utils.aoa_to_sheet(rg); wsRG['!cols']=[{wch:34},{wch:12},{wch:14},{wch:18}];
+  const rg=[['SOLO GERENCIAS DIVISIONALES — '+ST.periodo],[],['Gerencia Divisional','Genuinos','Premio genuino']];
+  Object.entries(H).sort((a,b)=>b[1].gen-a[1].gen).forEach(([g,G])=> rg.push([g,G.gen,Math.round(G.genP)]));
+  const wsRG=XLSX.utils.aoa_to_sheet(rg); wsRG['!cols']=[{wch:34},{wch:12},{wch:18}];
   XLSX.utils.book_append_sheet(wb,wsRG,'Por Gerencia');
 
   // Hoja detalle jerárquico completo (GD, Oficina, Vendedor) ordenado desc
   const det=[['DETALLE GD → OFICINA → VENDEDOR — '+ST.periodo],[],
-    ['Gerencia Divisional','CR','Oficina','Matrícula','Vendedor','Genuinos','No genuinos','Premio genuino']];
+    ['Gerencia Divisional','CR','Oficina','Matrícula','Vendedor','Genuinos','Premio genuino']];
   Object.entries(H).sort((a,b)=>b[1].gen-a[1].gen).forEach(([g,G])=>{
     Object.entries(G.ofis).sort((a,b)=>b[1].gen-a[1].gen).forEach(([cr,O])=>{
       const ofName=oficina[cr]||('CR '+cr);
       Object.entries(O.vend).sort((a,b)=>b[1].gen-a[1].gen).forEach(([mat,V])=>{
         const nom = mat==='—'?'(sin matrícula)':(nombreDe(mat)||'');
-        det.push([g,Number(cr),ofName,mat,nom,V.gen,V.no,Math.round(V.genP)]);
+        det.push([g,Number(cr),ofName,mat,nom,V.gen,Math.round(V.genP)]);
       });
     });
   });
-  const wsD=XLSX.utils.aoa_to_sheet(det); wsD['!cols']=[{wch:30},{wch:8},{wch:30},{wch:12},{wch:30},{wch:11},{wch:12},{wch:18}];
+  const wsD=XLSX.utils.aoa_to_sheet(det); wsD['!cols']=[{wch:30},{wch:8},{wch:30},{wch:12},{wch:30},{wch:11},{wch:18}];
   XLSX.utils.book_append_sheet(wb,wsD,'Detalle por Vendedor');
 
   XLSX.writeFile(wb,'Informe_Gerencia_'+ST.periodo+'.xlsx');
@@ -2213,7 +2211,6 @@ function buildInformeHTML(data){
           '<td class="rk"><span class="pos '+md+'">'+(vi+1)+'</span></td>'+
           '<td class="nom">'+esc(V.nombre||'—')+'<span class="mat">'+esc(V.matricula)+'</span></td>'+
           '<td class="n gen">'+nf(V.gen)+'</td>'+
-          '<td class="n no">'+nf(V.no)+'</td>'+
           '<td class="n pr">'+money(V.genP)+'</td>'+
           '</tr>';
       });
@@ -2221,7 +2218,7 @@ function buildInformeHTML(data){
         '<div class="of-head"><span class="of-name">'+esc(O.oficina)+'</span>'+
         '<span class="of-cr">CR '+O.cr+'</span>'+
         '<span class="of-tot"><b>'+nf(O.gen)+'</b> genuinos · '+money(O.genP)+'</span></div>'+
-        '<table class="vend"><thead><tr><th></th><th>Vendedor</th><th class="n">Genuinos</th><th class="n">No genuinos</th><th class="n">Premio genuino</th></tr></thead><tbody>'+
+        '<table class="vend"><thead><tr><th></th><th>Vendedor</th><th class="n">Genuinos</th><th class="n">Premio genuino</th></tr></thead><tbody>'+
         vendRows+'</tbody></table></div>';
     });
     gdHTML+='<article class="gd'+(neuq?' neuquen':'')+'">'+
