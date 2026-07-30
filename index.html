@@ -1574,9 +1574,10 @@ function renderJefe(q){
   const prima=ST.prima||0;
   const incentivoPorSeguro = prima*0.05;
   q=up(q);
-  // Solo los CR que crecieron y pagan incentivo, con filtro por dependencia o jefe
+  // Solo los CR que crecieron y pagan incentivo, con filtro por dependencia o jefe, ordenados por comisión desc
   const crPagan=(c.jefe.porCR||[]).filter(x=>x.comision>0)
-    .filter(x=>!q||up(x.oficina||('CR '+x.cr)).includes(q)||up(x.jefe_nombre||'').includes(q));
+    .filter(x=>!q||up(x.oficina||('CR '+x.cr)).includes(q)||up(x.jefe_nombre||'').includes(q))
+    .sort((a,b)=>b.comision-a.comision);
 
   // ---- Vista 1: detalle por dependencia (CR) ----
   let h='<div class="foot-note"><b>Detalle por dependencia</b> — comisión por crecimiento de cartera. Base: prima promedio '+money(prima)+' · incentivo por seguro (5%) '+money(incentivoPorSeguro)+'.</div>';
