@@ -1391,7 +1391,8 @@ function abrirCierre(periodo, quedarse){
       tieneMatricula: c.tieneMatricula!==false,
       dvMap: c.dvMap||{}, premioEnCentavos: !!c.premioEnCentavos
     };
-    recalcularTodo(); // usa ST.base + ST.prima como si acabaras de calcular
+    ST.cartera = c.cartera || null;   // restaurar la cartera del mes para la comisión de jefes
+    recalcularTodo(); // usa ST.base + ST.prima + ST.cartera como si acabaras de calcular
     // pre-renderizar TODAS las vistas para que ninguna aparezca vacía
     try{ renderInforme(); renderTop(); if(typeof renderEvolucion==='function') renderEvolucion(); }catch(e){}
     refreshBadge();
