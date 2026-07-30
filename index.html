@@ -539,6 +539,8 @@ tr.top3 td{background:#fffdf5}
     <div class="btn-row" style="gap:14px;flex-wrap:wrap;align-items:flex-end">
       <div><label class="fld">Nivel</label><div class="seg" id="segEvNivel"><button data-v="gd" class="on">Gerencia</button><button data-v="dep">Dependencia</button><button data-v="jefe">Jefe</button></div></div>
       <div><label class="fld">Métrica</label><div class="seg" id="segEvMet"><button data-v="dia" class="on">Seguros/día</button><button data-v="seg">Seguros totales</button><button data-v="prima">Prima</button></div></div>
+      <div id="evolFiltroWrap" style="display:none"><label class="fld">Filtrar por gerencia</label><select id="evolFiltroGD" class="txt" style="min-width:200px"></select></div>
+      <div><label class="fld">Cuántas mostrar</label><select id="evolTopN" class="txt" style="min-width:110px"><option value="6">Top 6</option><option value="10">Top 10</option><option value="15">Top 15</option><option value="999">Todas</option></select></div>
     </div>
     <div id="evolAviso" class="desc"></div>
     <div id="evolChart" style="margin:14px 0"></div>
@@ -1303,7 +1305,7 @@ function construirEvolucion(rows, gd, oficina){
     // por jefe (según CR)
     const jefe=jm[r.cr];
     if(jefe){ const jk=jefe.matricula;
-      if(!JEFE[jk]) JEFE[jk]={nombre:jefe.nombre, matricula:jk, gen:0,genP:0};
+      if(!JEFE[jk]) JEFE[jk]={nombre:jefe.nombre, matricula:jk, gen:0,genP:0, gd:g};
       JEFE[jk].gen++; JEFE[jk].genP+=r.premio;
     }
   });
@@ -1833,7 +1835,7 @@ function wireSeg(id, key){
 wireSeg('segMetrica','metrica'); wireSeg('segTipo','tipo'); wireSeg('segTop','topN');
 
 /* ================= EVOLUCIÓN ================= */
-const evState={nivel:'gd', metrica:'dia'};
+const evState={nivel:'gd', metrica:'dia', filtroGD:'__ALL__', topN:6};
 function cierresOrdenados(){
   return (DB.cierres||[]).filter(c=>c.evol).slice().sort((a,b)=> a.periodo<b.periodo?-1:1);
 }
@@ -1853,14 +1855,31 @@ function renderEvolucion(){
   // recolectar entidades presentes en el nivel elegido
   const nivel=evState.nivel, met=evState.metrica;
   const claves={}; // key -> nombre
-  cierres.forEach(c=>{ const bloque=(c.evol&&c.evol[nivel])||{}; Object.entries(bloque).forEach(([k,v])=>{ claves[k]= nivel==='gd'?prettyGD(k):(v.nombre||k); }); });
-  // ordenar entidades por su último valor desc
+  const gdDe={};   // key -> gerencia (para filtrar)
+  cierres.forEach(c=>{ const bloque=(c.evol&&c.evol[nivel])||{}; Object.entries(bloque).forEach(([k,v])=>{ claves[k]= nivel==='gd'?prettyGD(k):(v.nombre||k); if(nivel==='gd') gdDe[k]=k; else if(v.gd) gdDe[k]=v.gd; }); });
+
+  // filtro por gerencia (solo aplica a Dependencia/Jefe)
+  const wrap=document.getElementById('evolFiltroWrap');
+  const selF=document.getElementById('evolFiltroGD');
+  if(nivel==='gd'){ if(wrap) wrap.style.display='none'; }
+  else {
+    if(wrap) wrap.style.display='';
+    if(selF){
+      const gdsPresentes=[...new Set(Object.values(gdDe).filter(Boolean))].sort();
+      selF.innerHTML='<option value="__ALL__">Todas las gerencias</option>'+gdsPresentes.map(g=>'<option value="'+g+'">'+prettyGD(g)+'</option>').join('');
+      selF.value=evState.filtroGD;
+      selF.onchange=()=>{ evState.filtroGD=selF.value; renderEvolucion(); };
+    }
+  }
+
+  // aplicar filtro
+  let keys=Object.keys(claves);
+  if(nivel!=='gd' && evState.filtroGD!=='__ALL__') keys=keys.filter(k=>gdDe[k]===evState.filtroGD);
+
+  // ordenar por su último valor desc
   const ult=cierres[cierres.length-1];
-  const keysOrden=Object.keys(claves).sort((a,b)=>{
-    const va=valorEvol((ult.evol[nivel]||{})[a], met, ult.dias||diasDelCorte(ult.periodo,ult.desde,ult.hasta));
-    const vb=valorEvol((ult.evol[nivel]||{})[b], met, ult.dias||diasDelCorte(ult.periodo,ult.desde,ult.hasta));
-    return vb-va;
-  });
+  const dUlt = ult.dias||diasDelCorte(ult.periodo,ult.desde,ult.hasta);
+  const keysOrden=keys.sort((a,b)=> valorEvol((ult.evol[nivel]||{})[b], met, dUlt) - valorEvol((ult.evol[nivel]||{})[a], met, dUlt));
 
   const fmtVal = v => met==='prima'? money(v) : (met==='dia'? (Math.round(v*10)/10).toLocaleString('es-AR') : num(v));
   // ---- Tabla: meses en columnas ----
@@ -1869,9 +1888,8 @@ function renderEvolucion(){
   h+='<th class="r">Var. último</th></tr></thead><tbody>';
   keysOrden.forEach(k=>{
     h+='<tr><td>'+claves[k]+'</td>';
-    let prev=null, lastTwo=[];
+    let lastTwo=[];
     cierres.forEach(c=>{ const dias=c.dias||diasDelCorte(c.periodo,c.desde,c.hasta); const v=valorEvol((c.evol[nivel]||{})[k], met, dias); h+='<td class="r mono">'+(v?fmtVal(v):'—')+'</td>'; lastTwo.push(v); });
-    // variación último vs anterior
     let varCell='—';
     if(lastTwo.length>=2){ const a=lastTwo[lastTwo.length-2], b=lastTwo[lastTwo.length-1]; if(a>0){ const p=((b-a)/a*100); const col=p>=0?'var(--verde)':'#c0392b'; const sig=p>=0?'▲':'▼'; varCell='<span style="color:'+col+';font-weight:700">'+sig+' '+Math.abs(p).toFixed(0)+'%</span>'; } }
     h+='<td class="r">'+varCell+'</td></tr>';
@@ -1879,10 +1897,44 @@ function renderEvolucion(){
   h+='</tbody></table></div>';
   document.getElementById('evolTabla').innerHTML=h;
 
-  // ---- Gráfico de líneas (SVG) para el top 6 entidades ----
-  const top=keysOrden.slice(0,6);
+  // ---- Gráfico de BARRAS para el top N entidades ----
+  const topN=evState.topN||6;
+  const top=keysOrden.slice(0,topN);
   const series=top.map(k=> ({ nombre:claves[k], vals: cierres.map(c=>{ const dias=c.dias||diasDelCorte(c.periodo,c.desde,c.hasta); return valorEvol((c.evol[nivel]||{})[k], met, dias); }) }));
-  document.getElementById('evolChart').innerHTML = svgLineas(series, cierres.map(c=>nombreMes(c.periodo)), fmtVal);
+  document.getElementById('evolChart').innerHTML = svgBarras(series, cierres.map(c=>nombreMes(c.periodo)), fmtVal);
+}
+// Gráfico de barras agrupadas: cada entidad tiene un color, agrupadas por mes
+function escH(s){ return String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function svgBarras(series, labels, fmtVal){
+  if(!series.length || labels.length<1) return '<div class="desc">Sin datos para graficar.</div>';
+  const colores=['#0b3d66','#1e7d45','#c99700','#7c5cbf','#155a8a','#b03a5b','#0e8a7a','#d97706','#6d28d9','#be185d','#0369a1','#15803d','#a16207','#7e22ce','#9f1239'];
+  const maxV=Math.max(1, ...series.flatMap(s=>s.vals));
+  const nMeses=labels.length, nEnt=series.length;
+  const padL=64, padR=16, padT=16, padB=40, gapGrupo=30;
+  const anchoGrupo=Math.max(90, nEnt*16+20);
+  const W=Math.max(560, padL+padR + nMeses*anchoGrupo + (nMeses-1)*gapGrupo);
+  const H=340;
+  const plotW=W-padL-padR, plotH=H-padT-padB;
+  const y=v=> padT + plotH*(1 - v/maxV);
+  let s='<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;max-width:'+W+'px;font-family:inherit">';
+  // grilla + eje Y
+  for(let g=0; g<=4; g++){ const yy=padT+plotH*g/4; const val=maxV*(1-g/4); s+='<line x1="'+padL+'" y1="'+yy+'" x2="'+(W-padR)+'" y2="'+yy+'" stroke="#eef2f6"/>'; s+='<text x="'+(padL-8)+'" y="'+(yy+4)+'" text-anchor="end" font-size="10" fill="#5f6b76">'+fmtVal(val)+'</text>'; }
+  // barras por mes
+  labels.forEach((lb,mi)=>{
+    const x0=padL + mi*(anchoGrupo+gapGrupo);
+    const bw=(anchoGrupo-8)/nEnt;
+    series.forEach((se,si)=>{
+      const v=se.vals[mi]||0; const bx=x0+4+si*bw; const by=y(v); const bh=padT+plotH-by;
+      s+='<rect x="'+bx.toFixed(1)+'" y="'+by.toFixed(1)+'" width="'+(bw-2).toFixed(1)+'" height="'+Math.max(0,bh).toFixed(1)+'" fill="'+colores[si%colores.length]+'" rx="2"><title>'+escH(se.nombre)+' — '+lb+': '+fmtVal(v)+'</title></rect>';
+    });
+    s+='<text x="'+(x0+anchoGrupo/2).toFixed(1)+'" y="'+(H-22)+'" text-anchor="middle" font-size="11" fill="#33404d" font-weight="600">'+lb+'</text>';
+  });
+  s+='</svg>';
+  // leyenda con nombre completo y color
+  s+='<div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:10px">';
+  series.forEach((se,si)=>{ s+='<div style="display:flex;align-items:center;gap:5px;font-size:11.5px"><span style="width:12px;height:12px;border-radius:3px;background:'+colores[si%colores.length]+';display:inline-block"></span>'+escH(se.nombre)+'</div>'; });
+  s+='</div>';
+  return s;
 }
 function svgLineas(series, labels, fmtVal){
   if(!series.length || labels.length<1) return '';
@@ -1910,6 +1962,7 @@ function wireSegEvol(id, key){
   });
 }
 wireSegEvol('segEvNivel','nivel'); wireSegEvol('segEvMet','metrica');
+document.getElementById('evolTopN').onchange=e=>{ evState.topN=Number(e.target.value)||6; renderEvolucion(); };
 document.getElementById('btnEvolActualizar').onclick=()=>{ sincronizarDesdeNube().then(renderEvolucion); };
 document.getElementById('btnPrintTop').onclick=()=>{
   if(!ST.calc) return;
