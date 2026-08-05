@@ -2532,69 +2532,204 @@ function buildInformeEquipo(){
   }
   const corte=(ST.desde&&ST.hasta)?(ST.desde+' a '+ST.hasta+' · '+(ST.dias||'?')+' días'):'mes completo';
   const hoy=new Date().toLocaleDateString('es-AR');
-  const tabla=(head,rows)=>'<table><thead><tr>'+head+'</tr></thead><tbody>'+rows+'</tbody></table>';
+  // tabla interactiva: data-sort marca columnas ordenables; data-num en celdas numéricas
+  const T=(id,head,rows)=>'<div class="tbl-wrap"><table id="'+id+'" class="dt-int"><thead><tr>'+head+'</tr></thead><tbody>'+rows+'</tbody></table></div>';
+  // gerencias para el filtro
+  const gdOpts=['<option value="">Todas las gerencias</option>'].concat(gds.map(x=>'<option>'+esc(x.g)+'</option>')).join('');
 
+  // botones de exportar por sección
+  const EXP=id=>'<span class="exp noprint"><button title="Imprimir esta sección" onclick="event.stopPropagation();imprimirSec(\''+id+'\')">🖨</button><button title="Descargar esta sección" onclick="event.stopPropagation();descargarSec(\''+id+'\')">⬇</button><button title="Enviar por email" onclick="event.stopPropagation();emailSec(\''+id+'\')">✉</button></span>';
   return `<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Informe Comisiones ACA — ${esc(ST.periodo)}</title>
 <style>
-*{box-sizing:border-box} body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:0;background:#f4f6f8;color:#1a2530}
-.wrap{max-width:1000px;margin:0 auto;padding:24px}
-header{background:#0b3d66;color:#fff;padding:22px 24px;border-radius:12px;margin-bottom:20px}
-header h1{margin:0 0 4px;font-size:22px} header .sub{opacity:.85;font-size:13px}
-h2{font-size:16px;color:#0b3d66;margin:26px 0 10px;border-bottom:2px solid #e3e9ef;padding-bottom:6px}
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:8px}
+*{box-sizing:border-box} body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:0;background:#eef1f4;color:#1a2530}
+.wrap{max-width:1040px;margin:0 auto;padding:22px}
+header{background:linear-gradient(135deg,#0b3d66,#12578f);color:#fff;padding:22px 24px;border-radius:14px;margin-bottom:16px;box-shadow:0 4px 14px rgba(11,61,102,.2)}
+header h1{margin:0 0 4px;font-size:22px} header .sub{opacity:.9;font-size:13px}
+.toolbar{position:sticky;top:0;z-index:20;background:#fff;border:1px solid #e0e6ec;border-radius:12px;padding:12px 14px;margin-bottom:18px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;box-shadow:0 2px 8px rgba(0,0,0,.05)}
+.toolbar input,.toolbar select{padding:9px 12px;border:1px solid #cdd6df;border-radius:8px;font-size:13px;font-family:inherit}
+.toolbar input{flex:1;min-width:200px}
+.toolbar .btnprint{background:#0b3d66;color:#fff;border:0;padding:9px 16px;border-radius:8px;cursor:pointer;font-size:13px}
+.toolbar .hint{font-size:11.5px;color:#8b97a3;width:100%}
+section.blk{background:#fff;border:1px solid #e6ebf0;border-radius:12px;margin-bottom:14px;overflow:hidden}
+.blk h2{font-size:15px;color:#0b3d66;margin:0;padding:14px 18px;cursor:pointer;display:flex;align-items:center;gap:8px;user-select:none;background:#f7f9fb}
+.blk h2:hover{background:#eef3f7} .blk h2 .arrow{transition:transform .2s;font-size:11px;color:#7a8896}
+.blk h2 .exp{margin-left:auto;display:flex;gap:6px}
+.blk h2 .exp button{background:#e8eef4;color:#0b3d66;border:1px solid #d3ddE6;border-radius:6px;padding:4px 9px;font-size:11px;cursor:pointer}
+.blk h2 .exp button:hover{background:#0b3d66;color:#fff}
+.blk.closed h2 .arrow{transform:rotate(-90deg)} .blk .body{padding:14px 18px}
+.blk.closed .body{display:none}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
 .kpi{background:#fff;border:1px solid #e3e9ef;border-left:4px solid #1e7d45;border-radius:10px;padding:14px}
 .kpi .l{font-size:11px;text-transform:uppercase;color:#5f6b76;letter-spacing:.4px} .kpi .v{font-size:26px;font-weight:800;margin-top:4px}
 .kpi.b{border-left-color:#c99700} .kpi.p{border-left-color:#7c5cbf}
-table{width:100%;border-collapse:collapse;background:#fff;border-radius:10px;overflow:hidden;font-size:13px;box-shadow:0 1px 3px rgba(0,0,0,.05);margin-bottom:8px}
-thead th{background:#0b3d66;color:#fff;padding:9px 10px;text-align:left;font-size:12px}
-th.r,td.r{text-align:right} tbody td{padding:8px 10px;border-bottom:1px solid #eef2f6}
-tbody tr:nth-child(even){background:#fafbfc}
-.foot{margin-top:30px;font-size:11px;color:#8b97a3;text-align:center}
-@media print{body{background:#fff}.wrap{max-width:100%}.noprint{display:none}}
-.btnprint{background:#0b3d66;color:#fff;border:0;padding:10px 18px;border-radius:8px;cursor:pointer;font-size:13px;margin-bottom:16px}
+.tbl-wrap{overflow-x:auto}
+table.dt-int{width:100%;border-collapse:collapse;font-size:13px}
+table.dt-int thead th{background:#0b3d66;color:#fff;padding:9px 10px;text-align:left;font-size:12px;position:sticky;top:0}
+table.dt-int th[data-sort]{cursor:pointer;white-space:nowrap} table.dt-int th[data-sort]:hover{background:#12578f}
+table.dt-int th[data-sort]::after{content:' ⇅';opacity:.5;font-size:10px}
+table.dt-int th.asc::after{content:' ↑';opacity:1} table.dt-int th.desc::after{content:' ↓';opacity:1}
+table.dt-int th.r,table.dt-int td.r{text-align:right}
+table.dt-int tbody td{padding:8px 10px;border-bottom:1px solid #eef2f6}
+table.dt-int tbody tr:nth-child(even){background:#fafbfc}
+table.dt-int tbody tr.hide{display:none}
+.count{font-size:11px;color:#8b97a3;margin-top:6px}
+.foot{margin:24px 0;font-size:11px;color:#8b97a3;text-align:center}
+@media print{body{background:#fff}.toolbar,.noprint{display:none!important}.blk.closed .body{display:block!important}.blk .body{display:block!important}}
 </style></head><body><div class="wrap">
-<button class="btnprint noprint" onclick="window.print()">🖨 Imprimir o guardar como PDF</button>
 <header><h1>Liquidación de Comisiones — Seguros ACA</h1>
 <div class="sub">Período ${esc(ST.periodo)} · Corte ${esc(corte)} · Prima promedio ${M(ST.prima)} · Generado ${esc(hoy)}</div></header>
 
-<h2>Producción país (solo genuinos)</h2>
+<div class="toolbar noprint">
+  <input id="q" placeholder="🔎 Buscar nombre, matrícula o dependencia…">
+  <select id="fgd">${gdOpts}</select>
+  <button class="btnprint" onclick="window.print()">🖨 Imprimir / PDF</button>
+  <button class="btnprint" style="background:#1e7d45" onclick="descargarVista()">⬇ Descargar lo filtrado (HTML)</button>
+  <button class="btnprint" style="background:#7c5cbf" onclick="enviarEmail()">✉ Email</button>
+  <button class="btnprint" style="background:#5f6b76" onclick="toggleAll()">Expandir / plegar</button>
+  <div class="hint">Filtrá por nombre o gerencia, ordená por columnas, plegá secciones. Cada sección tiene sus propios botones para imprimir, descargar o mandar por email solo esa parte.</div>
+</div>
+
+<section class="blk" id="sec-pais"><h2><span class="arrow">▼</span>Producción país (solo genuinos)${EXP('sec-pais')}</h2><div class="body">
 <div class="kpis">
 <div class="kpi"><div class="l">Seguros genuinos</div><div class="v">${N(pGen)}</div></div>
 <div class="kpi b"><div class="l">Prima genuina (estimada)</div><div class="v" style="font-size:20px">${M(pGenP)}</div></div>
 <div class="kpi p"><div class="l">Comisión ventas total</div><div class="v" style="font-size:20px">${M(totComV)}</div></div>
 <div class="kpi p"><div class="l">Comisión cartera total</div><div class="v" style="font-size:20px">${M(totComJ)}</div></div>
-</div>
+</div></div></section>
 
-<h2>Discriminación por canal (genuinos)</h2>
-${tabla('<th>Canal</th><th class="r">Seguros genuinos</th><th class="r">%</th>',
-  canales.map(x=>'<tr><td>'+esc(x.n)+'</td><td class="r">'+N(x.v)+'</td><td class="r">'+(pGen?(x.v/pGen*100).toFixed(1):'0')+'%</td></tr>').join(''))}
+<section class="blk" id="sec-canal"><h2><span class="arrow">▼</span>Discriminación por canal (genuinos)${EXP('sec-canal')}</h2><div class="body">
+${T('tCanal','<th data-sort="txt">Canal</th><th class="r" data-sort="num">Seguros genuinos</th><th class="r" data-sort="num">%</th>',
+  canales.map(x=>'<tr><td>'+esc(x.n)+'</td><td class="r" data-num="'+x.v+'">'+N(x.v)+'</td><td class="r" data-num="'+(pGen?x.v/pGen*100:0)+'">'+(pGen?(x.v/pGen*100).toFixed(1):'0')+'%</td></tr>').join(''))}
+</div></section>
 
-<h2>Gerencias Divisionales</h2>
-${tabla('<th>#</th><th>Gerencia</th><th class="r">Seguros genuinos</th><th class="r">Prima genuina</th>',
-  gds.map((x,i)=>'<tr><td>'+(i+1)+'</td><td>'+esc(x.g)+'</td><td class="r">'+N(x.gen)+'</td><td class="r">'+M(x.genP)+'</td></tr>').join(''))}
+<section class="blk" id="sec-gd"><h2><span class="arrow">▼</span>Gerencias Divisionales${EXP('sec-gd')}</h2><div class="body">
+${T('tGD','<th data-sort="num">#</th><th data-sort="txt" data-gd>Gerencia</th><th class="r" data-sort="num">Seguros genuinos</th><th class="r" data-sort="num">Prima genuina</th>',
+  gds.map((x,i)=>'<tr data-gd="'+esc(x.g)+'"><td data-num="'+(i+1)+'">'+(i+1)+'</td><td>'+esc(x.g)+'</td><td class="r" data-num="'+x.gen+'">'+N(x.gen)+'</td><td class="r" data-num="'+Math.round(x.genP)+'">'+M(x.genP)+'</td></tr>').join(''))}
+</div></section>
 
-<h2>Top 15 oficinas</h2>
-${tabla('<th>#</th><th>Oficina</th><th class="r">Genuinos</th>',
-  topOf.map((x,i)=>'<tr><td>'+(i+1)+'</td><td>'+esc(x.n)+'</td><td class="r">'+N(x.v)+'</td></tr>').join(''))}
+<section class="blk" id="sec-of"><h2><span class="arrow">▼</span>Top 15 oficinas${EXP('sec-of')}</h2><div class="body">
+${T('tOf','<th data-sort="num">#</th><th data-sort="txt">Oficina</th><th class="r" data-sort="num">Genuinos</th>',
+  topOf.map((x,i)=>'<tr><td data-num="'+(i+1)+'">'+(i+1)+'</td><td>'+esc(x.n)+'</td><td class="r" data-num="'+x.v+'">'+N(x.v)+'</td></tr>').join(''))}
+</div></section>
 
-<h2>Top 15 vendedores</h2>
-${tabla('<th>#</th><th>Vendedor</th><th class="r">Genuinos</th>',
-  topVe.map((x,i)=>'<tr><td>'+(i+1)+'</td><td>'+esc(x.n)+'</td><td class="r">'+N(x.v)+'</td></tr>').join(''))}
+<section class="blk" id="sec-ve"><h2><span class="arrow">▼</span>Top 15 vendedores${EXP('sec-ve')}</h2><div class="body">
+${T('tVe','<th data-sort="num">#</th><th data-sort="txt">Vendedor</th><th class="r" data-sort="num">Genuinos</th>',
+  topVe.map((x,i)=>'<tr><td data-num="'+(i+1)+'">'+(i+1)+'</td><td>'+esc(x.n)+'</td><td class="r" data-num="'+x.v+'">'+N(x.v)+'</td></tr>').join(''))}
+</div></section>
 
-<h2>Comisiones por vendedor</h2>
-${tabla('<th>#</th><th>Matrícula</th><th>Vendedor</th><th class="r">Genuinas</th><th class="r">Tramo</th><th class="r">Comisión</th>',
-  vend.map((v,i)=>'<tr><td>'+(i+1)+'</td><td>'+esc(v.matricula)+'</td><td>'+esc(nombreDe(v.matricula)||v.nombre||'—')+'</td><td class="r">'+N(v.cantidad)+'</td><td class="r">'+(v.tramo*100).toFixed(0)+'%</td><td class="r">'+M(v.comision)+'</td></tr>').join('')
-  +'<tr style="font-weight:800;background:#eef4ec"><td colspan="5">Total comisión ventas</td><td class="r">'+M(totComV)+'</td></tr>')}
+<section class="blk" id="sec-comv"><h2><span class="arrow">▼</span>Comisiones por vendedor (${vend.length})${EXP('sec-comv')}</h2><div class="body">
+${T('tComV','<th data-sort="num">#</th><th data-sort="txt">Matrícula</th><th data-sort="txt">Vendedor</th><th class="r" data-sort="num">Genuinas</th><th class="r" data-sort="num">Tramo</th><th class="r" data-sort="num">Comisión</th>',
+  vend.map((v,i)=>'<tr><td data-num="'+(i+1)+'">'+(i+1)+'</td><td>'+esc(v.matricula)+'</td><td>'+esc(nombreDe(v.matricula)||v.nombre||'—')+'</td><td class="r" data-num="'+v.cantidad+'">'+N(v.cantidad)+'</td><td class="r" data-num="'+(v.tramo*100)+'">'+(v.tramo*100).toFixed(0)+'%</td><td class="r" data-num="'+Math.round(v.comision)+'">'+M(v.comision)+'</td></tr>').join(''))}
+<div class="count">Total comisión ventas: <b>${M(totComV)}</b></div>
+</div></section>
 
-${jefes.length?('<h2>Comisiones por jefe (crecimiento de cartera)</h2>'+tabla('<th>#</th><th>Matrícula</th><th>Jefe</th><th class="r">Dependencias</th><th class="r">Comisión</th>',
-  jefes.map((j,i)=>'<tr><td>'+(i+1)+'</td><td>'+esc(j.matricula)+'</td><td>'+esc(j.nombre||'—')+'</td><td class="r">'+j.crs.length+'</td><td class="r">'+M(j.comision)+'</td></tr>').join('')
-  +'<tr style="font-weight:800;background:#eef4ec"><td colspan="4">Total comisión cartera</td><td class="r">'+M(totComJ)+'</td></tr>')):''}
+${jefes.length?('<section class="blk" id="sec-comj"><h2><span class="arrow">▼</span>Comisiones por jefe — crecimiento de cartera ('+jefes.length+')'+EXP('sec-comj')+'</h2><div class="body">'+
+T('tComJ','<th data-sort="num">#</th><th data-sort="txt">Matrícula</th><th data-sort="txt">Jefe</th><th class="r" data-sort="num">Dependencias</th><th class="r" data-sort="num">Comisión</th>',
+  jefes.map((j,i)=>'<tr><td data-num="'+(i+1)+'">'+(i+1)+'</td><td>'+esc(j.matricula)+'</td><td>'+esc(j.nombre||'—')+'</td><td class="r" data-num="'+j.crs.length+'">'+j.crs.length+'</td><td class="r" data-num="'+Math.round(j.comision)+'">'+M(j.comision)+'</td></tr>').join(''))+
+'<div class="count">Total comisión cartera: <b>'+M(totComJ)+'</b></div></div></section>'):''}
 
-${evolHTML}
+${evolHTML?('<section class="blk" id="sec-evol"><h2><span class="arrow">▼</span>Evolución entre meses'+EXP('sec-evol')+'</h2><div class="body">'+evolHTML+'</div></section>'):''}
 
 <div class="foot">Informe generado por la app de Liquidación de Comisiones ACA · ${esc(hoy)} · Solo pólizas genuinas · La prima es la promedio del mes.</div>
-</div></body></html>`;
+</div>
+<script type="text/javascript">
+// Plegar/expandir secciones
+document.querySelectorAll('.blk h2').forEach(h=>h.addEventListener('click',()=>h.parentElement.classList.toggle('closed')));
+function toggleAll(){ const blks=[...document.querySelectorAll('.blk')]; const anyOpen=blks.some(b=>!b.classList.contains('closed')); blks.forEach(b=>b.classList.toggle('closed',anyOpen)); }
+// Buscador global
+const q=document.getElementById('q'), fgd=document.getElementById('fgd');
+function aplicarFiltros(){
+  const txt=(q.value||'').toLowerCase().trim();
+  const gdSel=(fgd.value||'');
+  document.querySelectorAll('table.dt-int tbody').forEach(tb=>{
+    [...tb.rows].forEach(tr=>{
+      const okTxt=!txt||tr.innerText.toLowerCase().includes(txt);
+      const rgd=tr.getAttribute('data-gd');
+      const okGd=!gdSel|| (rgd? rgd===gdSel : true);
+      tr.classList.toggle('hide', !(okTxt&&okGd));
+    });
+  });
+}
+q.addEventListener('input',aplicarFiltros); fgd.addEventListener('change',aplicarFiltros);
+// Ordenar por columna
+document.querySelectorAll('table.dt-int th[data-sort]').forEach(th=>{
+  th.addEventListener('click',()=>{
+    const table=th.closest('table'), tbody=table.tBodies[0];
+    const idx=[...th.parentNode.children].indexOf(th);
+    const type=th.getAttribute('data-sort');
+    const asc=!th.classList.contains('asc');
+    table.querySelectorAll('th').forEach(o=>o.classList.remove('asc','desc'));
+    th.classList.add(asc?'asc':'desc');
+    const rows=[...tbody.rows];
+    rows.sort((a,b)=>{
+      let A,B;
+      if(type==='num'){ A=parseFloat(a.cells[idx].getAttribute('data-num')||a.cells[idx].innerText.replace(/[^\\d.-]/g,''))||0; B=parseFloat(b.cells[idx].getAttribute('data-num')||b.cells[idx].innerText.replace(/[^\\d.-]/g,''))||0; }
+      else { A=a.cells[idx].innerText.toLowerCase(); B=b.cells[idx].innerText.toLowerCase(); }
+      return asc?(A>B?1:A<B?-1:0):(A<B?1:A>B?-1:0);
+    });
+    rows.forEach(r=>tbody.appendChild(r));
+  });
+});
+// ===== Exportar =====
+const CABECERA=document.querySelector('header').outerHTML;
+const ESTILOS=document.querySelector('style').outerHTML;
+function envoltorio(titulo, contenido){
+  return '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>'+titulo+'</title>'+ESTILOS+'</head><body><div class="wrap">'+CABECERA+contenido+'<div class="foot">Extraído del informe de Comisiones ACA.</div></div></body></html>';
+}
+// clona una sección mostrando solo las filas visibles (respeta el filtro actual)
+function seccionVisible(id){
+  const sec=document.getElementById(id).cloneNode(true);
+  sec.classList.remove('closed');
+  sec.querySelectorAll('.exp').forEach(e=>e.remove());
+  sec.querySelectorAll('.arrow').forEach(e=>e.remove());
+  // en el original, ocultar filas .hide
+  const orig=document.getElementById(id);
+  sec.querySelectorAll('table').forEach((tbl,ti)=>{
+    const otbl=orig.querySelectorAll('table')[ti];
+    [...tbl.tBodies[0].rows].forEach((r,ri)=>{ if(otbl.tBodies[0].rows[ri] && otbl.tBodies[0].rows[ri].classList.contains('hide')) r.remove(); });
+  });
+  return sec.outerHTML;
+}
+function tituloSec(id){ return document.getElementById(id).querySelector('h2').innerText.replace(/[🖨⬇✉]/g,'').trim(); }
+function imprimirSec(id){
+  const w=window.open('','_blank');
+  w.document.write(envoltorio(tituloSec(id), seccionVisible(id)));
+  w.document.close(); setTimeout(()=>w.print(),300);
+}
+function descargarSec(id){
+  const blob=new Blob([envoltorio(tituloSec(id), seccionVisible(id))],{type:'text/html;charset=utf-8'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=(tituloSec(id).replace(/[^a-z0-9]+/gi,'_'))+'.html'; a.click();
+}
+function resumenTexto(id){
+  const sec=document.getElementById(id); let txt=tituloSec(id)+'\\n\\n';
+  const orig=sec;
+  sec.querySelectorAll('table').forEach(tbl=>{
+    [...tbl.tBodies[0].rows].forEach(r=>{ if(r.classList.contains('hide'))return; txt+=[...r.cells].map(c=>c.innerText.trim()).join('  |  ')+'\\n'; });
+  });
+  sec.querySelectorAll('.kpi').forEach(k=>{ txt+=k.querySelector('.l').innerText+': '+k.querySelector('.v').innerText+'\\n'; });
+  return txt;
+}
+function emailSec(id){
+  const asunto='Informe ACA — '+tituloSec(id);
+  const cuerpo=resumenTexto(id)+'\\n(Para el detalle con formato, ver el archivo adjunto.)';
+  window.location.href='mailto:?subject='+encodeURIComponent(asunto)+'&body='+encodeURIComponent(cuerpo);
+}
+// Global: lo que esté visible (filtrado) en toda la página
+function vistaFiltrada(){
+  let html=''; document.querySelectorAll('.blk').forEach(b=>{ html+=seccionVisible(b.id); });
+  return html;
+}
+function descargarVista(){
+  const blob=new Blob([envoltorio('Informe filtrado ACA', vistaFiltrada())],{type:'text/html;charset=utf-8'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='Informe_filtrado.html'; a.click();
+}
+function enviarEmail(){
+  let cuerpo=''; document.querySelectorAll('.blk').forEach(b=>{ cuerpo+=resumenTexto(b.id)+'\\n'; });
+  window.location.href='mailto:?subject='+encodeURIComponent('Informe ACA')+'&body='+encodeURIComponent(cuerpo.slice(0,1800));
+}
+<\/script>
+</body></html>`;
 }
 document.getElementById('btnInfEquipo')&&(document.getElementById('btnInfEquipo').onclick=()=>{
   if(!ST.calc){ toast('Primero cargá y calculá un mes (o abrí un cierre guardado).','warn'); return; }
