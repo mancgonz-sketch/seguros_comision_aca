@@ -365,6 +365,7 @@ tr.top3 td{background:#fffdf5}
         <div><h2>Informe de producción</h2>
           <div class="desc" style="margin:0">Cada cuadro se puede imprimir por separado con su botón. "Descargar informe" baja el informe completo presentable.</div></div>
         <div class="btn-row" style="margin:0">
+          <button class="btn amar sm" id="btnInfEquipo">📧 Informe para el equipo</button>
           <button class="btn ghost sm" id="btnInfDescargar">Descargar informe completo</button>
           <button class="btn ghost sm" id="btnPrintPais">🖨 Imprimir país</button>
         </div>
@@ -666,23 +667,12 @@ function runSelfTest(){
 /* ================= ALMACENAMIENTO ACUMULATIVO ================= */
 /* ================= SUPABASE (base del equipo) ================= */
 const SB_URL = 'https://fuqxkssxqxthrunihieh.supabase.co';
-const CORREO_INTERNO = '@comisiones.aca';   // sufijo interno: el usuario sigue escribiendo solo su nombre
 const SB_KEY = 'sb_publishable_VA4wF5NtVak9bQPj55uDsQ_IhtqM1MR';
-let SB_TOKEN = null;                       // token de la sesión iniciada
 const SB_H = { 'apikey':SB_KEY, 'Authorization':'Bearer '+SB_KEY, 'Content-Type':'application/json' };
-function sbHeaders(extra){
-  return Object.assign({
-    'apikey': SB_KEY,
-    'Authorization': 'Bearer ' + (SB_TOKEN || SB_KEY),
-    'Content-Type': 'application/json'
-  }, extra || {});
-}
 let SESION = null; // {usuario, nombre, admin}
 
 async function sbFetch(path, opts){
-  const o = Object.assign({}, opts || {});
-  o.headers = sbHeaders(o.headers);
-  const r = await fetch(SB_URL+'/rest/v1/'+path, o);
+  const r = await fetch(SB_URL+'/rest/v1/'+path, { headers:SB_H, ...opts });
   if(!r.ok){ const t=await r.text().catch(()=> ''); throw new Error('Supabase '+r.status+' '+t.slice(0,120)); }
   const ct=r.headers.get('content-type')||'';
   return ct.includes('application/json') ? r.json() : null;
@@ -695,7 +685,7 @@ async function sha256(txt){
 function registrarActividad(accion, detalle){
   if(!SESION) return;
   sbFetch('com_actividad', { method:'POST',
-    headers:{'Prefer':'return=minimal'},
+    headers:{...SB_H,'Prefer':'return=minimal'},
     body:JSON.stringify({usuario:SESION.usuario, nombre:SESION.nombre, accion, detalle:detalle||'', cuando:new Date().toISOString()})
   }).catch(()=>{});
 }
@@ -711,25 +701,14 @@ async function intentarLogin(){
   if(!u||!p){ lgErr('lgMsg','Completá usuario y contraseña.'); return; }
   const btn=document.getElementById('lgBtn'); btn.disabled=true; btn.textContent='Ingresando…';
   try{
-    // Autenticación real contra el servidor: la contraseña nunca viaja al navegador
-    const ra = await fetch(SB_URL+'/auth/v1/token?grant_type=password', {
-      method:'POST',
-      headers:{ 'apikey':SB_KEY, 'Content-Type':'application/json' },
-      body: JSON.stringify({ email: u + CORREO_INTERNO, password: p })
-    });
-    const ja = await ra.json();
-    if(!ra.ok || !ja.access_token){
-      lgErr('lgMsg', ja.error_description || 'Usuario o contraseña incorrectos.');
-      return;
-    }
-    SB_TOKEN = ja.access_token;
-    try{ sessionStorage.setItem('com_tok', SB_TOKEN); }catch(e){}
-
-    const rows = await sbFetch('com_usuarios?usuario=eq.'+encodeURIComponent(u)+'&activo=eq.true&select=*');
-    if(!rows.length){ SB_TOKEN=null; lgErr('lgMsg','Usuario no habilitado.'); return; }
-    const user = rows[0];
-    SESION = { usuario:user.usuario, nombre:user.nombre, admin:!!user.admin };
+    const rows=await sbFetch('com_usuarios?usuario=eq.'+encodeURIComponent(u)+'&activo=eq.true&select=*');
+    if(!rows.length){ lgErr('lgMsg','Usuario no habilitado.'); return; }
+    const user=rows[0];
+    const h=await sha256(p);
+    if(h!==user.pass_hash){ lgErr('lgMsg','Contraseña incorrecta.'); return; }
+    SESION={usuario:user.usuario, nombre:user.nombre, admin:!!user.admin};
     if(user.debe_cambiar){
+      // pasar a cambio de clave obligatorio
       document.getElementById('loginBox').style.display='none';
       document.getElementById('changeBox').style.display='block';
     }else{
@@ -745,19 +724,9 @@ async function cambiarClave(){
   if(p1!==p2){ lgErr('chMsg','Las contraseñas no coinciden.'); return; }
   const btn=document.getElementById('chBtn'); btn.disabled=true; btn.textContent='Guardando…';
   try{
-    // La contraseña la guarda Supabase, cifrada; el navegador no la almacena
-    const rc = await fetch(SB_URL+'/auth/v1/user', {
-      method:'PUT',
-      headers:{ 'apikey':SB_KEY, 'Authorization':'Bearer '+SB_TOKEN, 'Content-Type':'application/json' },
-      body: JSON.stringify({ password: p1 })
-    });
-    if(!rc.ok){
-      const j = await rc.json().catch(()=>({}));
-      lgErr('chMsg', j.msg || j.error_description || 'No se pudo cambiar la contraseña.');
-      return;
-    }
+    const h=await sha256(p1);
     await sbFetch('com_usuarios?usuario=eq.'+encodeURIComponent(SESION.usuario),
-      { method:'PATCH', headers:{'Prefer':'return=minimal'}, body:JSON.stringify({debe_cambiar:false}) });
+      { method:'PATCH', headers:{...SB_H,'Prefer':'return=minimal'}, body:JSON.stringify({pass_hash:h, debe_cambiar:false}) });
     await entrarApp();
   }catch(e){ lgErr('chMsg','No se pudo guardar: '+e.message); }
   finally{ btn.disabled=false; btn.textContent='Guardar y entrar'; }
@@ -809,21 +778,21 @@ async function sincronizarDesdeNube(){
 async function guardarMaestraNube(clave, datos){
   if(!SESION) return;
   // Borrar la clave si existe y volver a insertar (más robusto que upsert)
-  await sbFetch('com_maestras?clave=eq.'+encodeURIComponent(clave), { method:'DELETE', headers:{'Prefer':'return=minimal'} });
+  await sbFetch('com_maestras?clave=eq.'+encodeURIComponent(clave), { method:'DELETE', headers:{...SB_H,'Prefer':'return=minimal'} });
   await sbFetch('com_maestras', { method:'POST',
-    headers:{'Prefer':'return=minimal'},
+    headers:{...SB_H,'Prefer':'return=minimal'},
     body:JSON.stringify({clave, datos, cargado_por:SESION.usuario, cargado_nom:SESION.nombre, actualizado:new Date().toISOString()}) });
 }
 async function guardarCierreNube(periodo, datos){
   if(!SESION) return;
-  await sbFetch('com_cierres?periodo=eq.'+encodeURIComponent(periodo), { method:'DELETE', headers:{'Prefer':'return=minimal'} });
+  await sbFetch('com_cierres?periodo=eq.'+encodeURIComponent(periodo), { method:'DELETE', headers:{...SB_H,'Prefer':'return=minimal'} });
   await sbFetch('com_cierres', { method:'POST',
-    headers:{'Prefer':'return=minimal'},
+    headers:{...SB_H,'Prefer':'return=minimal'},
     body:JSON.stringify({periodo, datos, cargado_por:SESION.usuario, cargado_nom:SESION.nombre, actualizado:new Date().toISOString()}) });
 }
 async function borrarCierreNube(periodo){
   if(!SESION) return;
-  await sbFetch('com_cierres?periodo=eq.'+encodeURIComponent(periodo), { method:'DELETE', headers:{'Prefer':'return=minimal'} });
+  await sbFetch('com_cierres?periodo=eq.'+encodeURIComponent(periodo), { method:'DELETE', headers:{...SB_H,'Prefer':'return=minimal'} });
 }
 
 /* ---- Rescatados permanentes (overrides) ---- */
@@ -833,13 +802,13 @@ async function cargarOverridesNube(){
 async function agregarOverrideNube(matricula, nombre){
   if(!SESION) return;
   await sbFetch('com_overrides', { method:'POST',
-    headers:{'Prefer':'resolution=merge-duplicates,return=minimal'},
+    headers:{...SB_H,'Prefer':'resolution=merge-duplicates,return=minimal'},
     body:JSON.stringify({matricula:String(matricula), nombre:nombre||'', cargado_por:SESION.usuario, cargado_nom:SESION.nombre, cuando:new Date().toISOString()}) });
   await cargarOverridesNube();
 }
 async function quitarOverrideNube(matricula){
   if(!SESION) return;
-  await sbFetch('com_overrides?matricula=eq.'+encodeURIComponent(String(matricula)), { method:'DELETE', headers:{'Prefer':'return=minimal'} });
+  await sbFetch('com_overrides?matricula=eq.'+encodeURIComponent(String(matricula)), { method:'DELETE', headers:{...SB_H,'Prefer':'return=minimal'} });
   await cargarOverridesNube();
 }
 
@@ -2266,6 +2235,26 @@ document.getElementById('btnExpInforme').onclick=()=>{
   const wsD=XLSX.utils.aoa_to_sheet(det); wsD['!cols']=[{wch:30},{wch:8},{wch:30},{wch:12},{wch:30},{wch:11},{wch:18}];
   XLSX.utils.book_append_sheet(wb,wsD,'Detalle por Vendedor');
 
+  // ---- Hoja Jefes (crecimiento de cartera) ----
+  const prima=ST.prima||0;
+  const crPagan=((ST.calc.jefe&&ST.calc.jefe.porCR)||[]).filter(x=>x.comision>0).sort((a,b)=>b.comision-a.comision);
+  if(crPagan.length){
+    const jefeAoa=[['COMISIÓN JEFES POR CRECIMIENTO DE CARTERA — '+ST.periodo],
+      ['Prima promedio: '+Math.round(prima)+'  ·  Incentivo por seguro (5%): '+Math.round(prima*0.05)],[],
+      ['Dependencia','Jefe','Cartera anterior','Cartera actual','Diferencia','% creció','Seguros producidos','Incentivo x seguro','Comisión']];
+    let tSeg=0,tCom=0;
+    crPagan.forEach(x=>{
+      const dif=(x.cartera_actual||0)-(x.cartera_previa||0);
+      const pct=x.crecimiento!=null?(x.crecimiento*100).toFixed(1)+'%':'';
+      jefeAoa.push([x.oficina||('CR '+x.cr), x.jefe_nombre||'', x.cartera_previa||0, x.cartera_actual||0, dif, pct, x.genuinos||0, Math.round(prima*0.05), Math.round(x.comision)]);
+      tSeg+=x.genuinos||0; tCom+=x.comision;
+    });
+    jefeAoa.push(['TOTAL','','','','','',tSeg,'',Math.round(tCom)]);
+    const wsJ=XLSX.utils.aoa_to_sheet(jefeAoa);
+    wsJ['!cols']=[{wch:32},{wch:26},{wch:15},{wch:14},{wch:12},{wch:10},{wch:18},{wch:16},{wch:14}];
+    XLSX.utils.book_append_sheet(wb,wsJ,'Jefes Cartera');
+  }
+
   XLSX.writeFile(wb,'Informe_Gerencia_'+ST.periodo+'.xlsx');
 };
 
@@ -2456,6 +2445,121 @@ document.getElementById('btnExpHTML')&&(document.getElementById('btnExpHTML').on
   const blob=new Blob([html],{type:'text/html;charset=utf-8'});
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
   a.download='Informe_Produccion_'+ST.periodo+'.html'; a.click();
+});
+
+// ===== Informe COMPLETO para el equipo (HTML autocontenido, para mandar por mail) =====
+function buildInformeEquipo(){
+  const c=ST.calc, gd=c.gd, oficina=c.oficina, rows=ST.base.rows;
+  const esc=s=>String(s==null?'':s).replace(/[&<>]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[ch]));
+  const M=money, N=num;
+  // país (solo genuinos)
+  let pGen=0,pGenP=0; rows.forEach(r=>{ if(r.genuino){pGen++;pGenP+=r.premio;} });
+  // desglose por canal (solo genuinos)
+  const CANAL_CR={'1864':'CAT — Centro de Atención','2925':'ACANET / WEB','1902':'Sistemas'};
+  const grp={}; rows.forEach(r=>{ if(!r.genuino) return; const cr=String(r.cr); let k = CANAL_CR[cr] || (GD_COM.includes(gd[r.cr])?'Gestión Operativa (Gerencias Divisionales)':'Otras áreas'); grp[k]=(grp[k]||0)+1; });
+  const ordenCanal=['Gestión Operativa (Gerencias Divisionales)','CAT — Centro de Atención','ACANET / WEB','Sistemas','Otras áreas'];
+  const canales=ordenCanal.filter(k=>grp[k]).map(k=>({n:k,v:grp[k]}));
+  // gerencias (solo genuinos, comerciales)
+  const H={}; rows.forEach(r=>{ if(!r.genuino) return; const g=gd[r.cr]; if(!GD_COM.includes(g)) return; if(!H[g])H[g]={gen:0,genP:0}; H[g].gen++; H[g].genP+=r.premio; });
+  const gds=Object.entries(H).map(([g,v])=>({g:prettyGD(g),...v})).sort((a,b)=>b.gen-a.gen);
+  // top oficinas y vendedores (solo genuinos, comerciales)
+  const OF={}, VE={};
+  rows.forEach(r=>{ if(!r.genuino) return; const g=gd[r.cr]; if(!GD_COM.includes(g)) return;
+    const of=oficina[r.cr]||('CR '+r.cr); OF[of]=(OF[of]||0)+1;
+    const mat=(r.matricula==null||r.matricula==='')?null:String(r.matricula);
+    if(mat){ if(!VE[mat])VE[mat]={n:nombreDe(mat)||('Mat '+mat),v:0}; VE[mat].v++; }
+  });
+  const topOf=Object.entries(OF).map(([n,v])=>({n,v})).sort((a,b)=>b.v-a.v).slice(0,15);
+  const topVe=Object.values(VE).sort((a,b)=>b.v-a.v).slice(0,15);
+  // comisiones
+  const vend=(c.vend||[]).slice().sort((a,b)=>b.comision-a.comision);
+  const totComV=vend.reduce((s,v)=>s+v.comision,0);
+  const jefes=((c.jefe&&c.jefe.jefes)||[]).slice().sort((a,b)=>b.comision-a.comision);
+  const totComJ=jefes.reduce((s,j)=>s+j.comision,0);
+  // evolución (si hay cierres)
+  const cierres=(DB.cierres||[]).filter(x=>x.evol).slice().sort((a,b)=>a.periodo<b.periodo?-1:1);
+  let evolHTML='';
+  if(cierres.length>=2){
+    const gdKeys={}; cierres.forEach(cc=>Object.entries(cc.evol.gd||{}).forEach(([k])=>gdKeys[k]=prettyGD(k)));
+    let rowsE=''; Object.keys(gdKeys).forEach(k=>{
+      let tds=''; cierres.forEach(cc=>{ const dias=cc.dias||30; const e=(cc.evol.gd||{})[k]; const v=e?(e.gen/dias):0; tds+='<td class="r">'+(v?(Math.round(v*10)/10):'—')+'</td>'; });
+      rowsE+='<tr><td>'+esc(gdKeys[k])+'</td>'+tds+'</tr>';
+    });
+    evolHTML='<h2>Evolución (seguros/día, solo genuinos)</h2><table><thead><tr><th>Gerencia</th>'+cierres.map(cc=>'<th class="r">'+cc.periodo+'</th>').join('')+'</tr></thead><tbody>'+rowsE+'</tbody></table>';
+  }
+  const corte=(ST.desde&&ST.hasta)?(ST.desde+' a '+ST.hasta+' · '+(ST.dias||'?')+' días'):'mes completo';
+  const hoy=new Date().toLocaleDateString('es-AR');
+  const tabla=(head,rows)=>'<table><thead><tr>'+head+'</tr></thead><tbody>'+rows+'</tbody></table>';
+
+  return `<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Informe Comisiones ACA — ${esc(ST.periodo)}</title>
+<style>
+*{box-sizing:border-box} body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:0;background:#f4f6f8;color:#1a2530}
+.wrap{max-width:1000px;margin:0 auto;padding:24px}
+header{background:#0b3d66;color:#fff;padding:22px 24px;border-radius:12px;margin-bottom:20px}
+header h1{margin:0 0 4px;font-size:22px} header .sub{opacity:.85;font-size:13px}
+h2{font-size:16px;color:#0b3d66;margin:26px 0 10px;border-bottom:2px solid #e3e9ef;padding-bottom:6px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:8px}
+.kpi{background:#fff;border:1px solid #e3e9ef;border-left:4px solid #1e7d45;border-radius:10px;padding:14px}
+.kpi .l{font-size:11px;text-transform:uppercase;color:#5f6b76;letter-spacing:.4px} .kpi .v{font-size:26px;font-weight:800;margin-top:4px}
+.kpi.b{border-left-color:#c99700} .kpi.p{border-left-color:#7c5cbf}
+table{width:100%;border-collapse:collapse;background:#fff;border-radius:10px;overflow:hidden;font-size:13px;box-shadow:0 1px 3px rgba(0,0,0,.05);margin-bottom:8px}
+thead th{background:#0b3d66;color:#fff;padding:9px 10px;text-align:left;font-size:12px}
+th.r,td.r{text-align:right} tbody td{padding:8px 10px;border-bottom:1px solid #eef2f6}
+tbody tr:nth-child(even){background:#fafbfc}
+.foot{margin-top:30px;font-size:11px;color:#8b97a3;text-align:center}
+@media print{body{background:#fff}.wrap{max-width:100%}.noprint{display:none}}
+.btnprint{background:#0b3d66;color:#fff;border:0;padding:10px 18px;border-radius:8px;cursor:pointer;font-size:13px;margin-bottom:16px}
+</style></head><body><div class="wrap">
+<button class="btnprint noprint" onclick="window.print()">🖨 Imprimir o guardar como PDF</button>
+<header><h1>Liquidación de Comisiones — Seguros ACA</h1>
+<div class="sub">Período ${esc(ST.periodo)} · Corte ${esc(corte)} · Prima promedio ${M(ST.prima)} · Generado ${esc(hoy)}</div></header>
+
+<h2>Producción país (solo genuinos)</h2>
+<div class="kpis">
+<div class="kpi"><div class="l">Seguros genuinos</div><div class="v">${N(pGen)}</div></div>
+<div class="kpi b"><div class="l">Prima genuina (estimada)</div><div class="v" style="font-size:20px">${M(pGenP)}</div></div>
+<div class="kpi p"><div class="l">Comisión ventas total</div><div class="v" style="font-size:20px">${M(totComV)}</div></div>
+<div class="kpi p"><div class="l">Comisión cartera total</div><div class="v" style="font-size:20px">${M(totComJ)}</div></div>
+</div>
+
+<h2>Discriminación por canal (genuinos)</h2>
+${tabla('<th>Canal</th><th class="r">Seguros genuinos</th><th class="r">%</th>',
+  canales.map(x=>'<tr><td>'+esc(x.n)+'</td><td class="r">'+N(x.v)+'</td><td class="r">'+(pGen?(x.v/pGen*100).toFixed(1):'0')+'%</td></tr>').join(''))}
+
+<h2>Gerencias Divisionales</h2>
+${tabla('<th>#</th><th>Gerencia</th><th class="r">Seguros genuinos</th><th class="r">Prima genuina</th>',
+  gds.map((x,i)=>'<tr><td>'+(i+1)+'</td><td>'+esc(x.g)+'</td><td class="r">'+N(x.gen)+'</td><td class="r">'+M(x.genP)+'</td></tr>').join(''))}
+
+<h2>Top 15 oficinas</h2>
+${tabla('<th>#</th><th>Oficina</th><th class="r">Genuinos</th>',
+  topOf.map((x,i)=>'<tr><td>'+(i+1)+'</td><td>'+esc(x.n)+'</td><td class="r">'+N(x.v)+'</td></tr>').join(''))}
+
+<h2>Top 15 vendedores</h2>
+${tabla('<th>#</th><th>Vendedor</th><th class="r">Genuinos</th>',
+  topVe.map((x,i)=>'<tr><td>'+(i+1)+'</td><td>'+esc(x.n)+'</td><td class="r">'+N(x.v)+'</td></tr>').join(''))}
+
+<h2>Comisiones por vendedor</h2>
+${tabla('<th>#</th><th>Matrícula</th><th>Vendedor</th><th class="r">Genuinas</th><th class="r">Tramo</th><th class="r">Comisión</th>',
+  vend.map((v,i)=>'<tr><td>'+(i+1)+'</td><td>'+esc(v.matricula)+'</td><td>'+esc(nombreDe(v.matricula)||v.nombre||'—')+'</td><td class="r">'+N(v.cantidad)+'</td><td class="r">'+(v.tramo*100).toFixed(0)+'%</td><td class="r">'+M(v.comision)+'</td></tr>').join('')
+  +'<tr style="font-weight:800;background:#eef4ec"><td colspan="5">Total comisión ventas</td><td class="r">'+M(totComV)+'</td></tr>')}
+
+${jefes.length?('<h2>Comisiones por jefe (crecimiento de cartera)</h2>'+tabla('<th>#</th><th>Matrícula</th><th>Jefe</th><th class="r">Dependencias</th><th class="r">Comisión</th>',
+  jefes.map((j,i)=>'<tr><td>'+(i+1)+'</td><td>'+esc(j.matricula)+'</td><td>'+esc(j.nombre||'—')+'</td><td class="r">'+j.crs.length+'</td><td class="r">'+M(j.comision)+'</td></tr>').join('')
+  +'<tr style="font-weight:800;background:#eef4ec"><td colspan="4">Total comisión cartera</td><td class="r">'+M(totComJ)+'</td></tr>')):''}
+
+${evolHTML}
+
+<div class="foot">Informe generado por la app de Liquidación de Comisiones ACA · ${esc(hoy)} · Solo pólizas genuinas · La prima es la promedio del mes.</div>
+</div></body></html>`;
+}
+document.getElementById('btnInfEquipo')&&(document.getElementById('btnInfEquipo').onclick=()=>{
+  if(!ST.calc){ toast('Primero cargá y calculá un mes (o abrí un cierre guardado).','warn'); return; }
+  const html=buildInformeEquipo();
+  const blob=new Blob([html],{type:'text/html;charset=utf-8'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download='Informe_Equipo_'+ST.periodo+'.html'; a.click();
+  toast('Informe para el equipo descargado. Adjuntalo por mail; se abre con doble clic.','ok');
 });
 
 /* ================= INIT ================= */
