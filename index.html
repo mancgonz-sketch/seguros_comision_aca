@@ -366,6 +366,7 @@ tr.top3 td{background:#fffdf5}
           <div class="desc" style="margin:0">Cada cuadro se puede imprimir por separado con su botón. "Descargar informe" baja el informe completo presentable.</div></div>
         <div class="btn-row" style="margin:0">
           <button class="btn amar sm" id="btnInfEquipo">📧 Informe para el equipo</button>
+          <button class="btn amar sm" id="btnInfDetallado">📄 Informe detallado (fijo)</button>
           <button class="btn ghost sm" id="btnInfDescargar">Descargar informe completo</button>
           <button class="btn ghost sm" id="btnPrintPais">🖨 Imprimir país</button>
         </div>
@@ -2499,14 +2500,15 @@ const ESTILO_INF='<style>'+
 '.toolbar{position:sticky;top:0;z-index:20;background:#fff;border:1px solid #e0e6ec;border-radius:12px;padding:12px 14px;margin-bottom:18px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;box-shadow:0 2px 8px rgba(0,0,0,.05)}'+
 '.toolbar input,.toolbar select{padding:9px 12px;border:1px solid #cdd6df;border-radius:8px;font-size:13px;font-family:inherit}'+
 '.toolbar input{flex:1;min-width:200px}'+
-'.toolbar .btnprint{background:#0b3d66;color:#fff;border:0;padding:9px 16px;border-radius:8px;cursor:pointer;font-size:13px}'+
+'.toolbar .btnprint{background:#0b3d66;color:#fff;border:0;padding:11px 18px;border-radius:9px;cursor:pointer;font-size:13.5px;font-weight:600}'+
+'.toolbar .btnprint:hover{filter:brightness(1.12)}'+
 '.toolbar .hint{font-size:11.5px;color:#8b97a3;width:100%}'+
 'section.blk{background:#fff;border:1px solid #e6ebf0;border-radius:12px;margin-bottom:14px;overflow:hidden}'+
 '.blk h2{font-size:15px;color:#0b3d66;margin:0;padding:14px 18px;cursor:pointer;display:flex;align-items:center;gap:8px;user-select:none;background:#f7f9fb}'+
 '.blk h2:hover{background:#eef3f7} .blk h2 .arrow{transition:transform .2s;font-size:11px;color:#7a8896}'+
-'.blk h2 .exp{margin-left:auto;display:flex;gap:6px}'+
-'.blk h2 .exp button{background:#e8eef4;color:#0b3d66;border:1px solid #d3ddE6;border-radius:6px;padding:4px 9px;font-size:11px;cursor:pointer}'+
-'.blk h2 .exp button:hover{background:#0b3d66;color:#fff}'+
+'.blk h2 .exp{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}'+
+'.blk h2 .exp button{background:#e8eef4;color:#0b3d66;border:1px solid #cbd6e0;border-radius:8px;padding:7px 12px;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap}'+
+'.blk h2 .exp button:hover{background:#0b3d66;color:#fff;border-color:#0b3d66}'+
 '.blk.closed h2 .arrow{transform:rotate(-90deg)} .blk .body{padding:14px 18px}'+
 '.blk.closed .body{display:none}'+
 '.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}'+
@@ -2537,10 +2539,11 @@ function tablaHTML(id,cols,filas){
 }
 function seccion(id,titulo,cont){
   return '<section class="blk" id="'+id+'"><h2><span class="arrow">&#9660;</span>'+titulo+
-    '<span class="exp noprint"><button title="Imprimir" onclick="event.stopPropagation();imprimirSec(\\''+id+'\\')">&#128424;</button>'+
-    '<button title="Descargar" onclick="event.stopPropagation();descargarSec(\\''+id+'\\')">&#11015;</button>'+
-    '<button title="Copiar texto" onclick="event.stopPropagation();copiarSec(\\''+id+'\\')">&#128203;</button>'+
-    '<button title="Email" onclick="event.stopPropagation();emailSec(\\''+id+'\\')">&#9993;</button></span></h2>'+
+    '<span class="exp noprint">'+
+    '<button title="Imprimir o guardar como PDF esta sección" onclick="event.stopPropagation();imprimirSec(\\''+id+'\\')">&#128424; Imprimir / PDF</button>'+
+    '<button title="Descargar esta sección como archivo HTML para adjuntar a un mail" onclick="event.stopPropagation();descargarSec(\\''+id+'\\')">&#11015; Descargar</button>'+
+    '<button title="Copiar el texto de esta sección para pegarlo en un mail o mensaje" onclick="event.stopPropagation();copiarSec(\\''+id+'\\')">&#128203; Copiar</button>'+
+    '</span></h2>'+
     '<div class="body">'+cont+'</div></section>';
 }
 function render(){
@@ -2704,12 +2707,11 @@ function buildInformeEquipo(){
 '<div class="toolbar noprint">'+
 '<input id="q" placeholder="🔎 Buscar nombre, matrícula o dependencia…">'+
 '<select id="fgd"></select>'+
-'<button class="btnprint" onclick="window.print()">🖨 Imprimir / PDF</button>'+
-'<button class="btnprint" style="background:#1e7d45" onclick="descargarVista()">⬇ Descargar lo filtrado</button>'+
-'<button class="btnprint" style="background:#7c5cbf" onclick="enviarEmail()">✉ Email</button>'+
-'<button class="btnprint" style="background:#0e8a7a" onclick="copiarVista()">📋 Copiar</button>'+
-'<button class="btnprint" style="background:#5f6b76" onclick="toggleAll()">Expandir / plegar</button>'+
-'<div class="hint">Al elegir una gerencia, TODO el informe (números y tablas) se recalcula a esa gerencia. El buscador filtra por texto. Cada sección tiene 🖨 ⬇ ✉ para exportar solo esa parte.</div>'+
+'<button class="btnprint" onclick="window.print()">🖨 Imprimir todo / PDF</button>'+
+'<button class="btnprint" style="background:#1e7d45" onclick="descargarVista()">⬇ Descargar lo filtrado (para adjuntar)</button>'+
+'<button class="btnprint" style="background:#0e8a7a" onclick="copiarVista()">📋 Copiar (para pegar en un mail)</button>'+
+'<button class="btnprint" style="background:#5f6b76" onclick="toggleAll()">▼ Expandir / plegar todo</button>'+
+'<div class="hint">Al elegir una gerencia, TODO el informe (números y tablas) se recalcula a esa gerencia. El buscador filtra por texto. <b>Cada sección tiene sus botones:</b> 🖨 Imprimir/PDF · ⬇ Descargar (archivo para adjuntar) · 📋 Copiar (texto para pegar en un mail).</div>'+
 '</div><div id="cont"></div>'+
 '<div class="foot">Informe de Comisiones ACA · '+DATA.hoy+' · Solo pólizas genuinas · La prima es la promedio del mes.</div>'+
 '</div><script>var DATA='+JSON.stringify(DATA)+';'+SCRIPT_INF+'<\/script></body></html>';
@@ -2722,6 +2724,56 @@ document.getElementById('btnInfEquipo')&&(document.getElementById('btnInfEquipo'
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
   a.download='Informe_Equipo_'+ST.periodo+'.html'; a.click();
   toast('Informe para el equipo descargado. Adjuntalo por mail; se abre con doble clic.','ok');
+});
+
+// ===== Informe DETALLADO (fijo, foto de lo que ve Gonzalo, sin filtros) =====
+function buildInformeDetallado(){
+  // asegurar que top y evolución estén renderizados
+  try{ renderTop(); }catch(e){}
+  try{ renderEvolucion(); }catch(e){}
+  const estilos=document.querySelector('style')?document.querySelector('style').outerHTML:'';
+  const cap=id=>{ const el=document.getElementById(id); return el?el.innerHTML:''; };
+  const bloque=(titulo,html)=> html?('<section class="det-blk"><h2>'+titulo+'</h2>'+html+'</section>'):'';
+  const hoy=new Date().toLocaleDateString('es-AR');
+  const corte=(ST.desde&&ST.hasta)?(ST.desde+' a '+ST.hasta+' · '+(ST.dias||'?')+' días'):'mes completo';
+  // top: títulos + tablas
+  const topT = (document.getElementById('topOfisTitle')?('<h3>'+document.getElementById('topOfisTitle').textContent+'</h3>'+cap('topOfis')+'<h3 style="margin-top:16px">'+document.getElementById('topVendTitle').textContent+'</h3>'+cap('topVend')):'');
+  const evol = (cap('evolChart')?('<div>'+cap('evolChart')+'</div>'):'')+cap('evolTabla');
+
+  const cuerpo=
+    bloque('Producción país', cap('boxPais'))+
+    bloque('Gerencias Divisionales', cap('boxGD'))+
+    bloque('Top ranking', topT)+
+    bloque('Comisiones por vendedor', cap('vendWrap'))+
+    bloque('Comisiones por jefe (crecimiento de cartera)', cap('jefeWrap'))+
+    bloque('Evolución', evol);
+
+  return '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'+
+'<title>Informe detallado ACA — '+ST.periodo+'</title>'+estilos+
+'<style>'+
+'body{background:#f4f6f8;margin:0} .det-wrap{max-width:1080px;margin:0 auto;padding:22px}'+
+'.det-header{background:linear-gradient(135deg,#0b3d66,#12578f);color:#fff;padding:22px 24px;border-radius:14px;margin-bottom:18px}'+
+'.det-header h1{margin:0 0 4px;font-size:22px}.det-header .sub{opacity:.9;font-size:13px}'+
+'.det-blk{background:#fff;border:1px solid #e6ebf0;border-radius:12px;padding:16px 20px;margin-bottom:16px}'+
+'.det-blk>h2{font-size:16px;color:#0b3d66;margin:0 0 12px;border-bottom:2px solid #e3e9ef;padding-bottom:8px}'+
+'.det-blk h3{font-size:13px;color:#33404d;margin:10px 0 6px}'+
+'.det-print{background:#0b3d66;color:#fff;border:0;padding:11px 20px;border-radius:9px;cursor:pointer;font-size:14px;font-weight:600;margin-bottom:16px}'+
+'@media print{body{background:#fff}.det-noprint{display:none!important}}'+
+'</style></head><body><div class="det-wrap">'+
+'<button class="det-print det-noprint" onclick="window.print()">🖨 Imprimir o guardar como PDF</button>'+
+'<div class="det-header"><h1>Liquidación de Comisiones — Seguros ACA</h1>'+
+'<div class="sub">Informe detallado · Período '+ST.periodo+' · Corte '+corte+' · Prima promedio '+money(ST.prima)+' · Generado '+hoy+'</div></div>'+
+cuerpo+
+'<div style="text-align:center;color:#8b97a3;font-size:11px;margin:20px 0">Informe detallado de Comisiones ACA · '+hoy+' · Solo lectura</div>'+
+'</div></body></html>';
+}
+document.getElementById('btnInfDetallado')&&(document.getElementById('btnInfDetallado').onclick=()=>{
+  if(!ST.calc){ toast('Primero cargá y calculá un mes (o abrí un cierre guardado).','warn'); return; }
+  const html=buildInformeDetallado();
+  const blob=new Blob([html],{type:'text/html;charset=utf-8'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download='Informe_Detallado_'+ST.periodo+'.html'; a.click();
+  toast('Informe detallado descargado. Es una foto fija de lo que ves, solo para mirar e imprimir.','ok');
 });
 
 /* ================= INIT ================= */
